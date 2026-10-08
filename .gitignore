@@ -1,0 +1,12 @@
+/target
+node_modules/
+.plans/
+bench/
+snapshots/
+screenshots/
+prompt/
+docker/.local-pay/
+qr-pay.png
+e2e/captures/
+e2e/.phantom/
+test-results/

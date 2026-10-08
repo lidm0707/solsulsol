@@ -1,0 +1,17 @@
+{
+  "name": "pos-e2e",
+  "private": true,
+  "packageManager": "yarn@1.22.22",
+  "scripts": {
+    "test": "playwright test",
+    "e2e": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0",
+    "@solana/web3.js": "^1.99.0",
+    "@types/node": "^26.6.4",
+    "jsqr": "^1.4.0",
+    "pngjs": "^7.0.0",
+    "typescript": "^7.0.2"
+  }
+}

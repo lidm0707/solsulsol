@@ -1,0 +1,45 @@
+name: solsulsol-e2e
+
+services:
+  postgres-test:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: pos_test
+      POSTGRES_PASSWORD: pos_test_password
+      POSTGRES_DB: pos_test
+    ports:
+      - "55432:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pos_test -d pos_test"]
+      interval: 3s
+      timeout: 3s
+      retries: 15
+
+  backend-test:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.backend
+    environment:
+      POS_DATABASE_URL: postgres://pos_test:pos_test_password@postgres-test:5432/pos_test
+      POS_JWT_SECRET: test-secret
+      POS_SOLANA_CLUSTER: devnet-solana
+      RUST_LOG: debug
+    ports:
+      - "18080:8080"
+    depends_on:
+      postgres-test:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health || exit 1"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  surfpool:
+    image: surfpool/surfpool:latest
+    # private: loopback only — reachable from the host's Phantom ext via localhost
+    ports:
+      - "127.0.0.1:8899:8899"
+      - "127.0.0.1:18488:18488"

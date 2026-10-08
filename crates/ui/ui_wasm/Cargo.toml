@@ -1,0 +1,28 @@
+[package]
+name = "ui_wasm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+ui_interface = { path = "../ui_interface" }
+pos-api = { path = "../../api" }
+pos-barcode = { path = "../../barcode" }
+sol_wallet_adaptor = { path = "../../sol_wallet_adaptor" }
+dioxus.workspace = true
+dioxus-web = "0.7"
+reslt_core = "0.1.0"
+qrcode = { workspace = true }
+web-sys = { version = "0.3", features = ["console"] }
+gloo-net.workspace = true
+gloo-timers = { version = "0.3", features = ["futures"] }
+js-sys = "0.3"
+serde.workspace = true
+serde_json.workspace = true
+async-trait.workspace = true
+uuid.workspace = true
+rust_decimal.workspace = true
+console_error_panic_hook = "0.1"

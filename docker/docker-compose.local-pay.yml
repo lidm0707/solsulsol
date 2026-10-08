@@ -1,0 +1,42 @@
+# Private localnet stack for a real Phantom scan-to-pay test.
+# Postgres + POS backend + Surfpool (solana test chain) all in Docker.
+# Surfpool replaces the native solana-test-validator: its image is multi-arch
+# (arm64-safe), unlike the x86/AVX-only validator image. See local-pay-test.sh.
+
+services:
+  surfpool:
+    image: surfpool/surfpool:latest
+    # loopback-only: host Phantom (testnet mode) RPC → http://localhost:8899
+    ports:
+      - "127.0.0.1:8899:8899"
+      - "127.0.0.1:18488:18488"
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: pos
+      POSTGRES_PASSWORD: pos_dev_password
+      POSTGRES_DB: pos
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pos -d pos"]
+      interval: 3s
+      timeout: 3s
+      retries: 15
+
+  backend:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.backend
+    environment:
+      POS_DATABASE_URL: postgres://pos:pos_dev_password@postgres:5432/pos
+      POS_JWT_SECRET: local-pay-secret
+      RUST_LOG: info
+    ports:
+      - "8080:8080"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy

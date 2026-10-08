@@ -1,0 +1,13 @@
+[package]
+name = "pos-qr-code"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+qrcode.workspace = true
+image.workspace = true
+thiserror.workspace = true

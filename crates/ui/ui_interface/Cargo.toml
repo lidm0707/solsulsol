@@ -1,0 +1,17 @@
+[package]
+name = "ui_interface"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+pos-api = { path = "../../api" }
+async-trait.workspace = true
+uuid.workspace = true
+rust_decimal.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
