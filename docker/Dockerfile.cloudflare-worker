@@ -1,0 +1,15 @@
+# Toolchain image for running `wrangler dev` (workerd/miniflare) with the
+# Rust→WASM worker. Source is mounted at runtime, not baked in, so
+# `wrangler dev`'s hot-reload rebuilds stay incremental.
+FROM rust:1-slim
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends nodejs npm curl ca-certificates pkg-config libssl-dev clang \
+    && rm -rf /var/lib/apt/lists/* \
+    && rustup target add wasm32-unknown-unknown
+
+ENV WRANGLER_VERSION=4.42.0
+RUN npm install -g "wrangler@${WRANGLER_VERSION}"
+
+WORKDIR /app

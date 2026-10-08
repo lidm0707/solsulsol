@@ -4,7 +4,7 @@ use axum::extract::FromRef;
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
 use pos_api::error::ApiError;
-use crate::app::service::use_cases::AppServices;
+use pos_app::service::use_cases::AppServices;
 use uuid::Uuid;
 
 pub const AUTH_HEADER: &str = "authorization";
@@ -19,7 +19,7 @@ where
     S: Send + Sync,
     AppServices: FromRef<S>,
 {
-    type Rejection = crate::infra::http_adapter::error::ApiErrorReponse;
+    type Rejection = crate::error::ApiErrorReponse;
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         let services = AppServices::from_ref(state);
@@ -35,7 +35,7 @@ where
             .tokens
             .verify(token)
             .await
-            .map_err(|_| crate::infra::http_adapter::error::ApiErrorReponse(ApiError::Unauthorized))?;
+            .map_err(|_| crate::error::ApiErrorReponse(ApiError::Unauthorized))?;
         Ok(AuthUser { user_id })
     }
 }

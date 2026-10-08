@@ -1,0 +1,31 @@
+[package]
+name = "cloudflare"
+version = "0.1.0"
+edition = "2021"
+authors = ["lidm0707 <kachon.moo.w@gmail.com>"]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+worker = { version = "0.8", features = ['http', 'axum', 'd1'] }
+worker-macros = { version = "0.8", features = ['http'] }
+axum = { version = "0.8", default-features = false, features = ["json"] }
+tower-service = "0.3.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+async-trait = "0.1"
+chrono = { version = "0.4", default-features = false, features = ["serde", "wasmbind"] }
+rust_decimal = "1"
+uuid = { version = "1", features = ["v4", "v7", "serde", "js"] }
+argon2 = "0.5"
+jsonwebtoken = "9"
+rand_core = { version = "0.6", features = ["getrandom"] }
+getrandom = { version = "0.2", features = ["js"] }
+pos-qr-code = { path = "../qr_code" }
+pos-promptpay = { path = "../promptpay" }
+pos-app = { path = "../app" }
+pos-api = { path = "../api", features = ["axum"] }
+pos-http = { path = "../http" }
+pos-barcode = { path = "../barcode" }

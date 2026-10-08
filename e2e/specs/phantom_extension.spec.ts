@@ -213,7 +213,7 @@ test(`${FLOW}`, async ({ playwright }) => {
     } else {
       console.log("[phantom-ext] already connected — no approval popup");
     }
-    const { publicKey } = await connecting;
+    const { publicKey } = (await connecting) as { publicKey: string };
     console.log(`[phantom-ext] connected publicKey: ${publicKey}`);
     expect(publicKey).toBe(addr);
 

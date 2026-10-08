@@ -18,13 +18,13 @@ This replaces the axum + sqlx/Postgres stack; the existing crates stay reusable
 ## 1. Scaffold the worker crate
 
 ```sh
-cargo new crates/worker --lib
-cd crates/worker
+cargo new crates/cloudflare --lib
+cd crates/cloudflare
 cargo add worker --features d1
 rustup target add wasm32-unknown-unknown
 ```
 
-`crates/worker/Cargo.toml`:
+`crates/cloudflare/Cargo.toml`:
 
 ```toml
 [lib]
@@ -37,7 +37,7 @@ pos-api = { path = "../api" }
 
 ## 2. wrangler config
 
-`crates/worker/wrangler.toml`:
+`crates/cloudflare/wrangler.toml`:
 
 ```toml
 name = "pos-api"
@@ -65,7 +65,7 @@ npx wrangler secret put POS_JWT_SECRET   # never in wrangler.toml
 
 ## 3. D1 schema + migrations
 
-`crates/worker/migrations/0001_init.sql` — same tables as the Postgres
+`crates/cloudflare/migrations/0001_init.sql` — same tables as the Postgres
 `migrations`, with SQLite types:
 
 ```sql

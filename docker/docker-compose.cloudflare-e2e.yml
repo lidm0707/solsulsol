@@ -1,0 +1,41 @@
+name: solsulsol-cloudflare-e2e
+
+services:
+  worker-e2e:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.cloudflare-worker
+    # repo mounted so worker-build can see the whole workspace (path deps)
+    # and wrangler dev hot-reloads on Rust source changes
+    volumes:
+      - ../crates:/app/crates
+      - ../Cargo.toml:/app/Cargo.toml:ro
+      - ../Cargo.lock:/app/Cargo.lock:ro
+      - worker-e2e-d1:/app/crates/cloudflare/.wrangler/state
+      # cargo cache: survives container recreation, wasm rebuilds stay incremental
+      - worker-e2e-target:/app/target
+    environment:
+      POS_JWT_SECRET: cloudflare-e2e-secret
+      RUST_LOG: debug
+      WRANGLER_SEND_METRICS: "false"
+      CI: "true"
+    ports:
+      - "18787:8787"
+    working_dir: /app/crates/cloudflare
+    command:
+      - sh
+      - -c
+      - |
+        wrangler d1 execute my_db --local --file schema.sql --persist-to .wrangler/state
+        exec wrangler dev --port 8787 --ip 0.0.0.0 --persist-to .wrangler/state
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8787/health || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      # first wasm build of the workspace is slow
+      start_period: 10m
+
+volumes:
+  worker-e2e-d1:
+  worker-e2e-target:

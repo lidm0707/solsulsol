@@ -3,8 +3,8 @@
 use crate::domain::entities::PaymentDestination;
 use crate::domain::value_objects::{ChainAddress, SplToken, new_id};
 
-use crate::app::service::shop::{ShopError, require_min_role};
-use crate::app::service::use_cases::AppServices;
+use crate::service::shop::{ShopError, require_min_role};
+use crate::service::use_cases::AppServices;
 use crate::domain::value_objects::Role;
 
 pub async fn add_destination(

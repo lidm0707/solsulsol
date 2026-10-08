@@ -6,7 +6,7 @@ use crate::domain::services::{
 };
 use crate::domain::value_objects::{Email, Role, new_id};
 
-use crate::app::service::use_cases::AppServices;
+use crate::service::use_cases::AppServices;
 
 pub const INVITE_TTL_HOURS: i64 = 48;
 pub const VAT_RATE_MIN: rust_decimal::Decimal = rust_decimal::Decimal::ZERO;

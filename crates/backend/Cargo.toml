@@ -8,7 +8,9 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-pos-api = { path = "../api" }
+pos-api = { path = "../api", features = ["axum"] }
+pos-app = { path = "../app" }
+pos-http = { path = "../http" }
 pos-barcode = { path = "../barcode" }
 pos-qr-code = { path = "../qr_code" }
 pos-promptpay = { path = "../promptpay" }
@@ -29,5 +31,3 @@ async-trait.workspace = true
 mockall.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
-printpdf.workspace = true
-image_024 = { package = "image", version = "0.24", default-features = false, features = ["png"] }

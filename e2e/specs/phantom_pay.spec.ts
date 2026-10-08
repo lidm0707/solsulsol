@@ -142,10 +142,10 @@ test(`${FLOW}`, async ({ playwright }) => {
     // web3 in the page, provider connect (approval popup handled if it appears)
     await pos.addScriptTag({ path: WEB3_BUNDLE });
     const connecting = pos.evaluate(() =>
-      window.phantom.solana
+      ((window as any).phantom.solana as { connect: () => Promise<any> })
         .connect()
-        .then((r) => ({ publicKey: String(r.publicKey) }))
-        .catch((e) => ({ err: String(e) })),
+        .then((r: any) => ({ publicKey: String(r.publicKey) }))
+        .catch((e: unknown) => ({ err: String(e) })),
     );
     const preApproval = await ctx.waitForEvent("page", { timeout: 8_000 }).catch(() => null);
     if (preApproval) {
@@ -166,7 +166,7 @@ test(`${FLOW}`, async ({ playwright }) => {
     const bh = await conn.getLatestBlockhash("finalized");
     const signing = pos.evaluate(
       async ({ from, to, lamports, blockhash }) => {
-        const w = window.solanaWeb3;
+        const w = (window as any).solanaWeb3;
         const tx = new w.Transaction({
           feePayer: new w.PublicKey(from),
           recentBlockhash: blockhash,
@@ -178,7 +178,7 @@ test(`${FLOW}`, async ({ playwright }) => {
           }),
         );
         try {
-          const res = await window.phantom.solana.signTransaction(tx);
+          const res = await (window as any).phantom.solana.signTransaction(tx);
           return { ok: true, tx: res.serialize().toString("base64") };
         } catch (e) {
           return { ok: false, err: String(e) };
@@ -275,9 +275,7 @@ test(`${FLOW}`, async ({ playwright }) => {
     // through the abnormal-ui escalation, blockhash may age)
     const raw = Buffer.from(txBase64, "base64");
     const sig = await conn.sendRawTransaction(raw, { skipPreflight: false });
-    const confirmed = await conn
-      .confirmTransaction(sig, "confirmed", { timeout: 90_000 })
-      .catch(() => null);
+    const confirmed = await conn.confirmTransaction(sig, "confirmed").catch(() => null);
     let status = confirmed?.value.err === null;
     if (!status) {
       // landed late? check by signature instead of failing immediately
@@ -337,7 +335,7 @@ test(`${FLOW}`, async ({ playwright }) => {
           signature: sig,
           slot: txProof?.slot,
           fee: txProof?.meta?.fee,
-          status: txProof?.meta?.status ?? { Ok: null },
+          status: txProof?.meta?.err === null ? { Ok: null } : txProof?.meta?.err,
           blockTime: txProof?.blockTime ? new Date(txProof.blockTime * 1000).toISOString() : null,
           rpc: SURFPOOL,
         },

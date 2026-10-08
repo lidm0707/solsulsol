@@ -3,13 +3,14 @@
 use crate::domain::entities::User;
 use crate::domain::value_objects::{Email, PasswordHash, Role, new_id};
 
-use crate::app::service::use_cases::AppServices;
 use crate::port::{PasswordHasher, TokenIssuer};
+use crate::service::use_cases::AppServices;
 
 #[derive(Debug)]
 pub enum AuthError {
     EmailTaken,
     BadCredentials,
+    Invalid(String),
     Storage(String),
 }
 
@@ -27,7 +28,7 @@ pub async fn register(
     email: &str,
     password: &str,
 ) -> Result<User, AuthError> {
-    let email = Email::parse(email).map_err(|e| AuthError::Storage(e.to_string()))?;
+    let email = Email::parse(email.trim()).map_err(|e| AuthError::Invalid(e.to_string()))?;
     if svc.users.find_by_email(email.as_str()).await?.is_some() {
         return Err(AuthError::EmailTaken);
     }
@@ -51,7 +52,7 @@ pub async fn login(
     email: &str,
     password: &str,
 ) -> Result<(uuid::Uuid, String), AuthError> {
-    let email = Email::parse(email).map_err(|e| AuthError::Storage(e.to_string()))?;
+    let email = Email::parse(email.trim()).map_err(|e| AuthError::Invalid(e.to_string()))?;
     let Some(user) = svc.users.find_by_email(email.as_str()).await? else {
         tracing::warn!(email = email.as_str(), "login failed: unknown email");
         return Err(AuthError::BadCredentials);

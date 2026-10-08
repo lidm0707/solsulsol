@@ -7,6 +7,11 @@ license.workspace = true
 [lints]
 workspace = true
 
+[features]
+default = []
+# HTTP (axum) support for API error responses; UI crates stay axum-free.
+axum = ["dep:axum"]
+
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
@@ -14,6 +19,4 @@ uuid.workspace = true
 rust_decimal.workspace = true
 chrono.workspace = true
 thiserror.workspace = true
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-axum.workspace = true
+axum = { version = "0.8", optional = true, default-features = false, features = ["json"] }

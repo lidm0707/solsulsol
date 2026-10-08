@@ -13,87 +13,84 @@ use pos_api::schema::{
     UpdateMemberRoleRequest, UpdateShopSettingsRequest, VatMode,
 };
 use tower_http::cors::CorsLayer;
+#[cfg(not(target_arch = "wasm32"))]
 use tower_http::trace::TraceLayer;
 use uuid::Uuid;
 
-use crate::app::service::destination as dest_svc;
-use crate::app::service::goods as goods_svc;
-use crate::app::service::shop::{self, ShopError};
-use crate::app::service::use_cases::AppServices;
-use crate::domain::value_objects::{ChainAddress, Email, Money};
-use crate::infra::http_adapter::error::ApiErrorReponse;
-use crate::infra::http_adapter::extract::AuthUser;
+use crate::error::ApiErrorReponse;
+use crate::extract::AuthUser;
+use pos_app::domain::value_objects::{ChainAddress, Email, Money};
+use pos_app::service::destination as dest_svc;
+use pos_app::service::goods as goods_svc;
+use pos_app::service::shop::{self, ShopError};
+use pos_app::service::use_cases::AppServices;
 
 type Api<T> = Result<axum::Json<T>, ApiErrorReponse>;
 
-const fn role_to_api(r: crate::domain::value_objects::Role) -> pos_api::schema::Role {
+const fn role_to_api(r: pos_app::domain::value_objects::Role) -> pos_api::schema::Role {
     match r {
-        crate::domain::value_objects::Role::Employee => pos_api::schema::Role::Employee,
-        crate::domain::value_objects::Role::Admin => pos_api::schema::Role::Admin,
-        crate::domain::value_objects::Role::Owner => pos_api::schema::Role::Owner,
-        crate::domain::value_objects::Role::SuperAdmin => pos_api::schema::Role::SuperAdmin,
+        pos_app::domain::value_objects::Role::Employee => pos_api::schema::Role::Employee,
+        pos_app::domain::value_objects::Role::Admin => pos_api::schema::Role::Admin,
+        pos_app::domain::value_objects::Role::Owner => pos_api::schema::Role::Owner,
+        pos_app::domain::value_objects::Role::SuperAdmin => pos_api::schema::Role::SuperAdmin,
     }
 }
 
-const fn role_to_domain(r: pos_api::schema::Role) -> crate::domain::value_objects::Role {
+const fn role_to_domain(r: pos_api::schema::Role) -> pos_app::domain::value_objects::Role {
     match r {
-        pos_api::schema::Role::Employee => crate::domain::value_objects::Role::Employee,
-        pos_api::schema::Role::Admin => crate::domain::value_objects::Role::Admin,
-        pos_api::schema::Role::Owner => crate::domain::value_objects::Role::Owner,
-        pos_api::schema::Role::SuperAdmin => crate::domain::value_objects::Role::SuperAdmin,
+        pos_api::schema::Role::Employee => pos_app::domain::value_objects::Role::Employee,
+        pos_api::schema::Role::Admin => pos_app::domain::value_objects::Role::Admin,
+        pos_api::schema::Role::Owner => pos_app::domain::value_objects::Role::Owner,
+        pos_api::schema::Role::SuperAdmin => pos_app::domain::value_objects::Role::SuperAdmin,
     }
 }
 
-const fn vat_mode_to_api(m: crate::domain::entities::VatMode) -> VatMode {
+const fn vat_mode_to_api(m: pos_app::domain::entities::VatMode) -> VatMode {
     match m {
-        crate::domain::entities::VatMode::None => VatMode::None,
-        crate::domain::entities::VatMode::Exclusive => VatMode::Exclusive,
-        crate::domain::entities::VatMode::Inclusive => VatMode::Inclusive,
+        pos_app::domain::entities::VatMode::None => VatMode::None,
+        pos_app::domain::entities::VatMode::Exclusive => VatMode::Exclusive,
+        pos_app::domain::entities::VatMode::Inclusive => VatMode::Inclusive,
     }
 }
 
-const fn chain_to_api(c: crate::domain::value_objects::Chain) -> pos_api::schema::Chain {
+const fn chain_to_api(c: pos_app::domain::value_objects::Chain) -> pos_api::schema::Chain {
     match c {
-        crate::domain::value_objects::Chain::Solana => pos_api::schema::Chain::Solana,
-        crate::domain::value_objects::Chain::Eth => pos_api::schema::Chain::Eth,
-        crate::domain::value_objects::Chain::Btc => pos_api::schema::Chain::Btc,
-        crate::domain::value_objects::Chain::Binance => pos_api::schema::Chain::Binance,
-        crate::domain::value_objects::Chain::Bank => pos_api::schema::Chain::Bank,
+        pos_app::domain::value_objects::Chain::Solana => pos_api::schema::Chain::Solana,
+        pos_app::domain::value_objects::Chain::Eth => pos_api::schema::Chain::Eth,
+        pos_app::domain::value_objects::Chain::Btc => pos_api::schema::Chain::Btc,
+        pos_app::domain::value_objects::Chain::Binance => pos_api::schema::Chain::Binance,
+        pos_app::domain::value_objects::Chain::Bank => pos_api::schema::Chain::Bank,
     }
 }
 
-const fn chain_to_domain(c: pos_api::schema::Chain) -> crate::domain::value_objects::Chain {
+const fn chain_to_domain(c: pos_api::schema::Chain) -> pos_app::domain::value_objects::Chain {
     match c {
-        pos_api::schema::Chain::Solana => crate::domain::value_objects::Chain::Solana,
-        pos_api::schema::Chain::Eth => crate::domain::value_objects::Chain::Eth,
-        pos_api::schema::Chain::Btc => crate::domain::value_objects::Chain::Btc,
-        pos_api::schema::Chain::Binance => crate::domain::value_objects::Chain::Binance,
-        pos_api::schema::Chain::Bank => crate::domain::value_objects::Chain::Bank,
+        pos_api::schema::Chain::Solana => pos_app::domain::value_objects::Chain::Solana,
+        pos_api::schema::Chain::Eth => pos_app::domain::value_objects::Chain::Eth,
+        pos_api::schema::Chain::Btc => pos_app::domain::value_objects::Chain::Btc,
+        pos_api::schema::Chain::Binance => pos_app::domain::value_objects::Chain::Binance,
+        pos_api::schema::Chain::Bank => pos_app::domain::value_objects::Chain::Bank,
     }
 }
 
-const fn token_to_api(
-    t: crate::domain::value_objects::SplToken,
-) -> pos_api::schema::SplToken {
+const fn token_to_api(t: pos_app::domain::value_objects::SplToken) -> pos_api::schema::SplToken {
     match t {
-        crate::domain::value_objects::SplToken::Sol => pos_api::schema::SplToken::Sol,
-        crate::domain::value_objects::SplToken::Usdc => pos_api::schema::SplToken::Usdc,
-        crate::domain::value_objects::SplToken::Usdt => pos_api::schema::SplToken::Usdt,
+        pos_app::domain::value_objects::SplToken::Sol => pos_api::schema::SplToken::Sol,
+        pos_app::domain::value_objects::SplToken::Usdc => pos_api::schema::SplToken::Usdc,
+        pos_app::domain::value_objects::SplToken::Usdt => pos_api::schema::SplToken::Usdt,
     }
 }
 
-const fn token_to_domain(
-    t: pos_api::schema::SplToken,
-) -> crate::domain::value_objects::SplToken {
+const fn token_to_domain(t: pos_api::schema::SplToken) -> pos_app::domain::value_objects::SplToken {
     match t {
-        pos_api::schema::SplToken::Sol => crate::domain::value_objects::SplToken::Sol,
-        pos_api::schema::SplToken::Usdc => crate::domain::value_objects::SplToken::Usdc,
-        pos_api::schema::SplToken::Usdt => crate::domain::value_objects::SplToken::Usdt,
+        pos_api::schema::SplToken::Sol => pos_app::domain::value_objects::SplToken::Sol,
+        pos_api::schema::SplToken::Usdc => pos_app::domain::value_objects::SplToken::Usdc,
+        pos_api::schema::SplToken::Usdt => pos_app::domain::value_objects::SplToken::Usdt,
     }
 }
 
 pub fn build_router(state: AppServices) -> Router {
-    Router::new()
+    let router = Router::new()
         .route(routes::HEALTH, get(health))
         .route(routes::REGISTER, post(handlers::register))
         .route(routes::LOGIN, post(handlers::login))
@@ -125,11 +122,15 @@ pub fn build_router(state: AppServices) -> Router {
             axum::routing::put(handlers::update_settings),
         )
         .route(routes::SHOP_BILLINGS, get(handlers::list_invoices))
-        .route(routes::SHOP_BILLING_PDF, get(handlers::invoice_pdf))
-        .route(routes::INVITE_ACCEPT, post(handlers::accept_invite))
-        .layer(CorsLayer::permissive())
-        .layer(TraceLayer::new_for_http())
-        .with_state(state)
+        .route(routes::INVITE_ACCEPT, post(handlers::accept_invite));
+
+    #[cfg(not(target_arch = "wasm32"))]
+    let router = router.route(routes::SHOP_BILLING_PDF, get(handlers::invoice_pdf));
+
+    #[cfg(not(target_arch = "wasm32"))]
+    let router = router.layer(TraceLayer::new_for_http());
+
+    router.layer(CorsLayer::permissive()).with_state(state)
 }
 
 async fn health() -> &'static str {
@@ -156,14 +157,15 @@ mod handlers {
     ) -> Api<serde_json::Value> {
         let hasher = svc.hasher.clone();
         let user =
-            crate::app::service::auth::register(&svc, hasher.as_ref(), &req.email, &req.password)
+            pos_app::service::auth::register(&svc, hasher.as_ref(), &req.email, &req.password)
                 .await
                 .map_err(|e| match e {
-                    crate::app::service::auth::AuthError::EmailTaken => {
+                    pos_app::service::auth::AuthError::EmailTaken => {
                         ApiError::Conflict("email taken".into())
                     }
-                    crate::app::service::auth::AuthError::BadCredentials => ApiError::Unauthorized,
-                    crate::app::service::auth::AuthError::Storage(_) => ApiError::Internal,
+                    pos_app::service::auth::AuthError::BadCredentials => ApiError::Unauthorized,
+                    pos_app::service::auth::AuthError::Invalid(e) => ApiError::Invalid(e),
+                    pos_app::service::auth::AuthError::Storage(_) => ApiError::Internal,
                 })?;
         Ok(axum::Json(serde_json::json!({ "user_id": user.id })))
     }
@@ -174,7 +176,7 @@ mod handlers {
     ) -> Api<LoginResponse> {
         let hasher = svc.hasher.clone();
         let tokens = svc.tokens.clone();
-        let (user_id, token) = crate::app::service::auth::login(
+        let (user_id, token) = pos_app::service::auth::login(
             &svc,
             hasher.as_ref(),
             tokens.as_ref(),
@@ -183,11 +185,12 @@ mod handlers {
         )
         .await
         .map_err(|e| match e {
-            crate::app::service::auth::AuthError::EmailTaken => {
+            pos_app::service::auth::AuthError::EmailTaken => {
                 ApiError::Conflict("email taken".into())
             }
-            crate::app::service::auth::AuthError::BadCredentials => ApiError::Unauthorized,
-            crate::app::service::auth::AuthError::Storage(_) => ApiError::Internal,
+            pos_app::service::auth::AuthError::BadCredentials => ApiError::Unauthorized,
+            pos_app::service::auth::AuthError::Invalid(e) => ApiError::Invalid(e),
+            pos_app::service::auth::AuthError::Storage(_) => ApiError::Internal,
         })?;
         Ok(axum::Json(LoginResponse { token, user_id }))
     }
@@ -215,9 +218,9 @@ mod handlers {
         Json(req): Json<UpdateShopSettingsRequest>,
     ) -> Api<serde_json::Value> {
         let mode = match req.vat_mode {
-            VatMode::None => crate::domain::entities::VatMode::None,
-            VatMode::Exclusive => crate::domain::entities::VatMode::Exclusive,
-            VatMode::Inclusive => crate::domain::entities::VatMode::Inclusive,
+            VatMode::None => pos_app::domain::entities::VatMode::None,
+            VatMode::Exclusive => pos_app::domain::entities::VatMode::Exclusive,
+            VatMode::Inclusive => pos_app::domain::entities::VatMode::Inclusive,
         };
         shop::update_settings(&svc, auth.user_id, shop_id, mode, req.vat_rate)
             .await
@@ -294,7 +297,7 @@ mod handlers {
         Ok(axum::Json(items.iter().map(goods_response).collect()))
     }
 
-    fn goods_response(p: &crate::domain::entities::Product) -> GoodsResponse {
+    fn goods_response(p: &pos_app::domain::entities::Product) -> GoodsResponse {
         GoodsResponse {
             goods_id: p.id,
             shop_id: p.shop_id,
@@ -314,9 +317,15 @@ mod handlers {
     ) -> Api<DestinationResponse> {
         let address = ChainAddress::parse(chain_to_domain(req.chain), &req.address)
             .map_err(|e| ApiError::Invalid(e.to_string()))?;
-        let d = dest_svc::add_destination(&svc, auth.user_id, shop_id, address, token_to_domain(req.token))
-            .await
-            .map_err(map_shop)?;
+        let d = dest_svc::add_destination(
+            &svc,
+            auth.user_id,
+            shop_id,
+            address,
+            token_to_domain(req.token),
+        )
+        .await
+        .map_err(map_shop)?;
         Ok(axum::Json(destination_response(&d)))
     }
 
@@ -405,7 +414,7 @@ mod handlers {
             &svc,
             auth.user_id,
             shop_id,
-            crate::domain::value_objects::Role::Admin,
+            pos_app::domain::value_objects::Role::Admin,
         )
         .await
         .map_err(map_shop)?;
@@ -450,7 +459,7 @@ mod handlers {
             &svc,
             auth.user_id,
             shop_id,
-            crate::domain::value_objects::Role::Employee,
+            pos_app::domain::value_objects::Role::Employee,
         )
         .await
         .map_err(map_shop)?;
@@ -470,7 +479,7 @@ mod handlers {
             .map_err(|_| ApiErrorReponse(ApiError::Internal))?
             .ok_or(ApiErrorReponse(ApiError::NotFound))?;
         let qr = svc.qr.clone();
-        let (invoice, qr_png) = crate::app::service::invoice::checkout(
+        let (invoice, qr_png) = pos_app::service::invoice::checkout(
             &svc,
             qr.as_ref(),
             svc.promptpay.as_ref(),
@@ -480,13 +489,19 @@ mod handlers {
         )
         .await
         .map_err(|e| match e {
-            crate::app::service::invoice::InvoiceError::NoProducts => {
+            pos_app::service::invoice::InvoiceError::NoProducts => {
                 ApiError::Invalid("no products selected".into())
             }
-            crate::app::service::invoice::InvoiceError::Storage(_) => ApiError::Internal,
+            pos_app::service::invoice::InvoiceError::Storage(ref msg) => {
+                tracing::debug!("checkout storage: {msg}");
+                ApiError::Internal
+            }
         })?;
-        let payload =
-            crate::app::service::invoice::pay_payload(svc.promptpay.as_ref(), &invoice.destination, invoice.total());
+        let payload = pos_app::service::invoice::pay_payload(
+            svc.promptpay.as_ref(),
+            &invoice.destination,
+            invoice.total(),
+        );
         Ok(axum::Json(invoice_response(
             &invoice,
             &payload,
@@ -503,7 +518,7 @@ mod handlers {
             &svc,
             auth.user_id,
             shop_id,
-            crate::domain::value_objects::Role::Employee,
+            pos_app::domain::value_objects::Role::Employee,
         )
         .await
         .map_err(map_shop)?;
@@ -514,13 +529,16 @@ mod handlers {
             .map_err(|_| ApiErrorReponse(ApiError::Internal))?;
         let mut out = Vec::with_capacity(invoices.len());
         for inv in invoices {
-            let payload =
-                crate::app::service::invoice::pay_payload(svc.promptpay.as_ref(), &inv.destination, inv.total());
+            let payload = pos_app::service::invoice::pay_payload(
+                svc.promptpay.as_ref(),
+                &inv.destination,
+                inv.total(),
+            );
             out.push(invoice_response(&inv, &payload, 0));
         }
         Ok(axum::Json(out))
     }
-
+    #[cfg(not(target_arch = "wasm32"))]
     pub async fn invoice_pdf(
         State(svc): State<AppServices>,
         auth: AuthUser,
@@ -530,7 +548,7 @@ mod handlers {
             &svc,
             auth.user_id,
             shop_id,
-            crate::domain::value_objects::Role::Employee,
+            pos_app::domain::value_objects::Role::Employee,
         )
         .await
         .map_err(map_shop)?;
@@ -549,7 +567,7 @@ mod handlers {
             .await
             .map_err(|_| ApiErrorReponse(ApiError::Internal))?
             .ok_or(ApiErrorReponse(ApiError::NotFound))?;
-        let payload = crate::app::service::invoice::pay_payload(
+        let payload = pos_app::service::invoice::pay_payload(
             svc.promptpay.as_ref(),
             &invoice.destination,
             invoice.total(),
@@ -559,7 +577,7 @@ mod handlers {
             .render_png(&payload)
             .await
             .map_err(|_| ApiErrorReponse(ApiError::Internal))?;
-        let bytes = crate::app::service::pdf::render_invoice_pdf(&invoice, &shop.name, &qr_png)
+        let bytes = pos_app::service::pdf::render_invoice_pdf(&invoice, &shop.name, &qr_png)
             .map_err(|_| ApiErrorReponse(ApiError::Internal))?;
         axum::response::Response::builder()
             .header("content-type", "application/pdf")
@@ -572,7 +590,7 @@ mod handlers {
     }
 
     fn destination_response(
-        d: &crate::domain::entities::PaymentDestination,
+        d: &pos_app::domain::entities::PaymentDestination,
     ) -> DestinationResponse {
         DestinationResponse {
             destination_id: d.id,
@@ -585,7 +603,7 @@ mod handlers {
     }
 
     fn invoice_response(
-        inv: &crate::domain::entities::Invoice,
+        inv: &pos_app::domain::entities::Invoice,
         payload: &str,
         qr_bytes: usize,
     ) -> pos_api::schema::InvoiceResponse {

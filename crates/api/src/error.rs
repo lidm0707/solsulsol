@@ -16,7 +16,7 @@ pub enum ApiError {
     Internal,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(feature = "axum")]
 mod axum_impl {
     use super::ApiError;
     use axum::Json;

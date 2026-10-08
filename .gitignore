@@ -10,3 +10,4 @@ qr-pay.png
 e2e/captures/
 e2e/.phantom/
 test-results/
+wrangler.toml

@@ -3,8 +3,9 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-pub mod app;
 pub mod core;
-pub mod domain;
 pub mod infra;
-pub mod port;
+pub use pos_app as app;
+pub use pos_app::domain;
+pub use pos_app::port;
+pub use pos_http as http_adapter;

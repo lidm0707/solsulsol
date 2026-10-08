@@ -4,9 +4,10 @@ use crate::domain::entities::{Invoice, InvoiceLine, Order, PaymentDestination, S
 use crate::domain::value_objects::{Chain, new_id};
 use rust_decimal::Decimal;
 
-use crate::app::service::use_cases::AppServices;
 use crate::port::{PromptPayEncoder, QrRenderer};
+use crate::service::use_cases::AppServices;
 
+#[cfg(not(target_arch = "wasm32"))]
 const POS_SOLANA_CLUSTER_ENV: &str = "POS_SOLANA_CLUSTER";
 
 #[derive(Debug)]
@@ -75,7 +76,11 @@ pub fn pay_payload(pp: &dyn PromptPayEncoder, dest: &PaymentDestination, total: 
                 Some(mint) => format!("&spl-token={mint}"),
                 None => String::new(),
             };
-            // cluster param routes wallet apps to a non-mainnet network (test mode)
+            // cluster param routes wallet apps to a non-mainnet network (test mode);
+            // std::env is unimplemented on wasm32 (workers), so only read it natively
+            #[cfg(target_arch = "wasm32")]
+            let cluster = String::new();
+            #[cfg(not(target_arch = "wasm32"))]
             let cluster = match std::env::var(POS_SOLANA_CLUSTER_ENV).as_deref() {
                 Ok(c) if !c.is_empty() => format!("&cluster={c}"),
                 _ => String::new(),

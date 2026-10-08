@@ -172,7 +172,7 @@ fn test_router() -> axum::Router {
         .promptpay(Arc::new(AlwaysErr))
         .build()
         .expect("all services wired");
-    pos_backend::infra::http_adapter::router::build_router(svc)
+    pos_backend::http_adapter::router::build_router(svc)
 }
 
 async fn send(req: Request<Body>) -> axum::response::Response {

@@ -1,5 +1,5 @@
 use crate::app::service::use_cases::AppServices;
-use crate::infra::http_adapter::router::build_router;
+use pos_http::router::build_router;
 use tracing_subscriber::EnvFilter;
 
 pub const DEFAULT_ADDR: &str = "0.0.0.0:8080";
