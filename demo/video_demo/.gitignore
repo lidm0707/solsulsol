@@ -6,7 +6,10 @@ frames/
 strip.png
 onion.png
 *.wav
-!media/*.wav
+!media/pad.wav
+!media/chime.wav
+!media/tick.wav
+!media/gong.wav
 test_render/
 _frame_snapshots/*.actual.png
 _frame_snapshots/*.diff.png

@@ -105,7 +105,13 @@ impl Video for DemoVideo<'_> {
                 )
             })
             .collect();
-        let mut tracks = vec![AudioTrack::new("pad.wav", Second(0.2)..Eof).fade_in(3.0)];
+        let mut tracks = vec![
+            AudioTrack::new("pad.wav", Second(0.2)..Eof).fade_in(3.0),
+            AudioTrack::new(
+                "voice_over.wav",
+                Second(INTRO_SECONDS)..Second(INTRO_SECONDS + DEMO_SECONDS),
+            ),
+        ];
         tracks.extend(chimes);
         tracks.extend(ticks);
         let outro_at = DEMO_START + DEMO_SECONDS;

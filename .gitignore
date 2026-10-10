@@ -13,3 +13,7 @@ e2e/.phantom/
 test-results/
 wrangler.toml
 .solana/
+*.mp3
+*.mp4
+*.ttf
+*.wav
