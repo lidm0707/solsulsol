@@ -1,14 +1,8 @@
-//! Encryption ports: password hashing + token issuing.
+//! Encryption ports: token issuing (wallet auth needs no password hashing).
 
-use async_trait::async_trait;
 use crate::domain::value_objects::Role;
+use async_trait::async_trait;
 use uuid::Uuid;
-
-#[async_trait]
-pub trait PasswordHasher: Send + Sync {
-    async fn hash(&self, plain: &str) -> Result<String, String>;
-    async fn verify(&self, plain: &str, hash: &str) -> Result<bool, String>;
-}
 
 #[async_trait]
 pub trait TokenIssuer: Send + Sync {

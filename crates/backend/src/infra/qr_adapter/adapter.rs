@@ -1,7 +1,7 @@
 //! QR adapter: implements pos-app QrRenderer with pos-qr-code.
 
 use async_trait::async_trait;
-use crate::port::QrRenderer;
+use crate::port::qr::QrRenderer;
 
 pub struct QrAdapter;
 

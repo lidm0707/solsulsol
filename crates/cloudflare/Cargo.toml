@@ -9,6 +9,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 worker = { version = "0.8", features = ['http', 'axum', 'd1'] }
+bytes = "1"
 worker-macros = { version = "0.8", features = ['http'] }
 axum = { version = "0.8", default-features = false, features = ["json"] }
 tower-service = "0.3.3"
@@ -18,9 +19,11 @@ tracing = "0.1"
 async-trait = "0.1"
 chrono = { version = "0.4", default-features = false, features = ["serde", "wasmbind"] }
 rust_decimal = "1"
+num-traits = { version = "0.2", default-features = false }
 uuid = { version = "1", features = ["v4", "v7", "serde", "js"] }
-argon2 = "0.5"
 jsonwebtoken = "9"
+bs58 = "0.5"
+ed25519-dalek = { version = "2", default-features = false }
 rand_core = { version = "0.6", features = ["getrandom"] }
 getrandom = { version = "0.2", features = ["js"] }
 pos-qr-code = { path = "../qr_code" }

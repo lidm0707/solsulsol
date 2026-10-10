@@ -1,7 +1,7 @@
 //! QrAdapter tests: implements QrRenderer over pos-qr-code.
 
 use pos_backend::infra::qr_adapter::adapter::QrAdapter;
-use pos_backend::port::QrRenderer;
+use pos_backend::port::qr::QrRenderer;
 
 const PAYLOAD: &str = "pay:btc:bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4:01890a5d";
 

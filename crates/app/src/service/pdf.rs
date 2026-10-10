@@ -7,7 +7,7 @@ use printpdf::path::{PaintMode, WindingOrder};
 use printpdf::{BuiltinFont, Color, Image, ImageTransform, Mm, PdfDocument, Rgb};
 use rust_decimal::Decimal;
 
-use crate::domain::entities::{Invoice, VatMode};
+use crate::domain::entities::{Currency, Invoice, VatMode};
 
 /// Thermal-roll paper width used by grocery POS printers.
 pub const PAPER_W_MM: f32 = 80.0;
@@ -62,7 +62,10 @@ pub fn render_invoice_pdf(
     invoice: &Invoice,
     shop_name: &str,
     qr_png: &[u8],
+    currency: Currency,
+    fx_thb_per_sol: Decimal,
 ) -> Result<Vec<u8>, PdfError> {
+    let money = MoneyFmt::new(currency, fx_thb_per_sol);
     let doc = PdfDocument::empty("POS Billing");
     let (page_idx, layer_idx) = doc.add_page(Mm(PAPER_W_MM), Mm(page_height(invoice)), "Billing");
     let layer = doc.get_page(page_idx).get_layer(layer_idx);
@@ -83,8 +86,8 @@ pub fn render_invoice_pdf(
     };
 
     header(&mut c, invoice, shop_name);
-    items(&mut c, invoice);
-    totals(&mut c, invoice);
+    items(&mut c, invoice, &money);
+    totals(&mut c, invoice, &money);
     qr_card(&mut c, invoice, &qr);
     footer(&mut c);
 
@@ -113,7 +116,36 @@ fn header(c: &mut Ctx, invoice: &Invoice, shop_name: &str) {
     c.y += 3.0;
 }
 
-fn items(c: &mut Ctx, invoice: &Invoice) {
+/// Amount formatting in the shop currency: THB converts via fx (falling back
+/// to raw ◎ when no rate is set), USDT shows the raw ◎ amount.
+struct MoneyFmt {
+    symbol: &'static str,
+    fx: Decimal,
+}
+
+impl MoneyFmt {
+    fn new(currency: Currency, fx_thb_per_sol: Decimal) -> Self {
+        let converted = currency == Currency::Thb && fx_thb_per_sol > Decimal::ZERO;
+        Self {
+            symbol: if converted { "\u{0e3f}" } else { "\u{25c8}" },
+            fx: if converted {
+                fx_thb_per_sol
+            } else {
+                Decimal::ONE
+            },
+        }
+    }
+
+    fn amount(&self, v: Decimal) -> Decimal {
+        (v * self.fx).round_dp(2)
+    }
+
+    fn fmt(&self, v: Decimal) -> String {
+        format!("{} {}", self.symbol, self.amount(v).normalize())
+    }
+}
+
+fn items(c: &mut Ctx, invoice: &Invoice, money: &MoneyFmt) {
     text(
         c,
         "ITEM",
@@ -173,7 +205,7 @@ fn items(c: &mut Ctx, invoice: &Invoice) {
         );
         text(
             c,
-            &money(line.price.amount()),
+            &money.fmt(line.price.amount()),
             BODY_SIZE,
             Mm(COLS_MM[2]),
             c.y,
@@ -183,7 +215,7 @@ fn items(c: &mut Ctx, invoice: &Invoice) {
         let amount = line.price.amount() * Decimal::from(line.qty);
         text_right(
             c,
-            &money(amount),
+            &money.fmt(amount),
             BODY_SIZE,
             CONTENT_RIGHT_MM,
             c.y,
@@ -197,13 +229,14 @@ fn items(c: &mut Ctx, invoice: &Invoice) {
     c.y += 3.0;
 }
 
-fn totals(c: &mut Ctx, invoice: &Invoice) {
+fn totals(c: &mut Ctx, invoice: &Invoice, money: &MoneyFmt) {
     if invoice.vat_mode != VatMode::None {
-        summary_row(c, "Subtotal", invoice.subtotal());
+        summary_row(c, "Subtotal", invoice.subtotal(), money);
         summary_row(
             c,
             &format!("VAT {}%", invoice.vat_rate.normalize()),
             invoice.vat_amount(),
+            money,
         );
     }
     rect(
@@ -226,7 +259,7 @@ fn totals(c: &mut Ctx, invoice: &Invoice) {
     );
     text_right(
         c,
-        &format!("\u{25c8} {}", money(invoice.total())),
+        &money.fmt(invoice.total()),
         12.0,
         CONTENT_RIGHT_MM - 1.5,
         c.y + 1.8,
@@ -234,13 +267,13 @@ fn totals(c: &mut Ctx, invoice: &Invoice) {
         INK,
     );
     c.y += ROW_MM + 1.5;
-    summary_row(c, "cost basis", invoice.cost());
+    summary_row(c, "cost basis", invoice.cost(), money);
     c.y += 2.0;
     rule(c, c.y, DIM);
     c.y += 3.0;
 }
 
-fn summary_row(c: &mut Ctx, label: &str, amount: Decimal) {
+fn summary_row(c: &mut Ctx, label: &str, amount: Decimal, money: &MoneyFmt) {
     text(
         c,
         label,
@@ -252,7 +285,7 @@ fn summary_row(c: &mut Ctx, label: &str, amount: Decimal) {
     );
     text_right(
         c,
-        &format!("\u{25c8} {}", money(amount)),
+        &money.fmt(amount),
         SMALL_SIZE,
         CONTENT_RIGHT_MM,
         c.y,
@@ -340,10 +373,6 @@ fn wrap_text(c: &Ctx, s: &str, size: f32, x: f32, y: f32, max_chars: usize, col:
 /// Helvetica average glyph width ~0.5em; mm = chars * size * 0.5 * pt2mm.
 fn est_width(s: &str, size: f32) -> f32 {
     s.chars().count() as f32 * size * 0.5 * 0.3528
-}
-
-fn money(v: Decimal) -> String {
-    format!("{v:.2}")
 }
 
 fn text_center(

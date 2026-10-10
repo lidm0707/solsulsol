@@ -1,7 +1,11 @@
 //! Storage ports.
 
+use crate::domain::entities::subscription::{
+    AuthNonce, PaymentOrder, Subscription, SubscriptionStatus,
+};
 use crate::domain::entities::{
-    Invite, InviteStatus, Invoice, PaymentDestination, Product, Shop, ShopMember, User, VatMode,
+    Currency, Goods, Invite, InviteStatus, Invoice, PaymentDestination, Shop, ShopMember, User,
+    VatMode,
 };
 use crate::domain::value_objects::Role;
 use async_trait::async_trait;
@@ -11,8 +15,90 @@ use uuid::Uuid;
 #[async_trait]
 pub trait UserRepo: Send + Sync {
     async fn insert(&self, user: &User) -> Result<(), String>;
-    async fn find_by_email(&self, email: &str) -> Result<Option<User>, String>;
     async fn find_by_id(&self, id: Uuid) -> Result<Option<User>, String>;
+    async fn find_by_wallet(&self, wallet: &str) -> Result<Option<User>, String>;
+}
+
+#[async_trait]
+pub trait NonceRepo: Send + Sync {
+    async fn insert(&self, nonce: &AuthNonce) -> Result<(), String>;
+    async fn find(&self, wallet: &str, nonce: &str) -> Result<Option<AuthNonce>, String>;
+    /// Atomically marks the nonce used; `Ok(false)` when missing, already
+    /// used, expired or owned by another wallet (replay / expiry rejected).
+    async fn consume(
+        &self,
+        wallet: &str,
+        nonce: &str,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<bool, String>;
+}
+
+#[async_trait]
+pub trait SubscriptionRepo: Send + Sync {
+    async fn find_by_user(&self, user_id: Uuid) -> Result<Option<Subscription>, String>;
+    async fn upsert(&self, sub: &Subscription) -> Result<(), String>;
+    /// Active subs whose `expires_at` has passed; candidates for grace.
+    async fn list_to_mark_grace(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<Subscription>, String>;
+    /// Grace subs past `grace_until`; candidates for soft deletion.
+    async fn list_to_mark_lapsed(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<Subscription>, String>;
+    /// Lapsed subs past the recovery window; candidates for hard deletion.
+    async fn list_to_delete(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<Subscription>, String>;
+    async fn set_status(
+        &self,
+        id: Uuid,
+        status: SubscriptionStatus,
+        grace_until: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<(), String>;
+}
+
+#[async_trait]
+pub trait PaymentOrderRepo: Send + Sync {
+    async fn insert(&self, order: &PaymentOrder) -> Result<(), String>;
+    async fn find_by_id(&self, id: Uuid) -> Result<Option<PaymentOrder>, String>;
+    async fn find_by_signature(&self, signature: &str) -> Result<Option<PaymentOrder>, String>;
+    /// Atomic guard: flips pending → paid only once. `Ok(false)` when the
+    /// order was already paid (duplicate signature / concurrent verify).
+    async fn mark_paid_if_pending(
+        &self,
+        id: Uuid,
+        signature: &str,
+        paid_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<bool, String>;
+}
+
+#[async_trait]
+pub trait StorageUsageRepo: Send + Sync {
+    /// Records `bytes` under a unique key (idempotent per key) unless the
+    /// shop total would exceed `quota`; returns the new total.
+    async fn add_checked(
+        &self,
+        shop_id: Uuid,
+        key: Uuid,
+        bytes: i64,
+        quota: i64,
+    ) -> Result<i64, StorageError>;
+    async fn total(&self, shop_id: Uuid) -> Result<i64, StorageError>;
+}
+
+#[derive(Debug)]
+pub enum StorageError {
+    QuotaExceeded,
+    Storage(String),
+}
+
+impl From<String> for StorageError {
+    fn from(e: String) -> Self {
+        StorageError::Storage(e)
+    }
 }
 
 #[async_trait]
@@ -27,8 +113,27 @@ pub trait ShopRepo: Send + Sync {
         _id: Uuid,
         _vat_mode: VatMode,
         _vat_rate: Decimal,
+        _fx_thb_per_sol: Decimal,
+        _currency: Currency,
     ) -> Result<(), String> {
         Err("shop settings not supported".into())
+    }
+
+    /// Marks every shop owned by `owner_id` deleted at `now` (soft).
+    async fn soft_delete_for_owner(
+        &self,
+        _owner_id: Uuid,
+        _now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<u64, String> {
+        Err("shop soft delete not supported".into())
+    }
+
+    /// Permanently removes shops (and cascades) soft-deleted before `before`.
+    async fn hard_delete_expired(
+        &self,
+        _before: chrono::DateTime<chrono::Utc>,
+    ) -> Result<u64, String> {
+        Err("shop hard delete not supported".into())
     }
 }
 
@@ -41,11 +146,11 @@ pub trait ShopMemberRepo: Send + Sync {
 }
 
 #[async_trait]
-pub trait ProductRepo: Send + Sync {
-    async fn insert(&self, product: &Product) -> Result<(), String>;
-    async fn find_by_shop(&self, shop_id: Uuid) -> Result<Vec<Product>, String>;
-    /// Removes one unit from stock; errors when the product is out of stock.
-    async fn take_units(&self, product_id: Uuid) -> Result<(), String>;
+pub trait GoodsRepo: Send + Sync {
+    async fn insert(&self, goods: &Goods) -> Result<(), String>;
+    async fn find_by_shop(&self, shop_id: Uuid) -> Result<Vec<Goods>, String>;
+    /// Removes one unit from stock; errors when the goods is out of stock.
+    async fn take_units(&self, goods_id: Uuid) -> Result<(), String>;
 }
 
 #[async_trait]
@@ -69,6 +174,8 @@ pub trait InvoiceRepo: Send + Sync {
     async fn insert(&self, invoice: &Invoice) -> Result<(), String>;
     async fn find_by_id(&self, id: Uuid) -> Result<Option<Invoice>, String>;
     async fn list_by_shop(&self, shop_id: Uuid) -> Result<Vec<Invoice>, String>;
+    /// Sold quantity per goods (paid invoices only), best-sell first source.
+    async fn sales_by_goods(&self, shop_id: Uuid) -> Result<Vec<(Uuid, u64)>, String>;
 }
 
 /// Transaction port: services open scoped transactions and commit/rollback.

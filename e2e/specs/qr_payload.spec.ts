@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { apiAuth, conn, ensureUsdc, freshWallet, paySubscription } from "./helpers/solana";
 
 // Validates the checkout QR payload against the Solana Pay transfer-URI spec
 // (https://github.com/solana-foundation/solana-pay/blob/master/SPEC.md) —
@@ -6,7 +7,6 @@ import { test, expect } from "@playwright/test";
 
 const BACKEND = process.env.POS_BACKEND_URL ?? "http://localhost:18080";
 
-const rand = () => Math.random().toString(36).slice(2, 10);
 const VALID_ADDRESS = "4Nd1mBQtrMJVYDfZS3vNs3p8zQH4wVzLB6s5aXKc9PqR";
 const B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 
@@ -41,10 +41,14 @@ test.beforeEach(({ request: r }) => {
 });
 
 test("checkout QR is a spec-compliant Solana Pay transfer URI", async () => {
-  const owner = { email: `qr-${rand()}@test.dev`, password: "hunter2234" };
-  await api("POST", "/auth/register", undefined, owner);
-  const login = await api("POST", "/auth/login", undefined, owner);
-  const { token }: { token: string } = await login.json();
+  const wallet = freshWallet();
+  await ensureUsdc(conn());
+  const { token } = await apiAuth(api, wallet);
+  const order = await api("POST", "/payments/orders", token, {});
+  const { order_id } = await order.json();
+  const sig = await paySubscription(conn());
+  const verify = await api("POST", "/payments/verify", token, { order_id, signature: sig });
+  expect(verify.status()).toBe(200);
   const shop = await api("POST", "/shops", token, { name: "QR Cafe" });
   const { shop_id }: { shop_id: string } = await shop.json();
 

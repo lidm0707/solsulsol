@@ -1,6 +1,9 @@
 import { test, expect } from "@playwright/test";
+import { execSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { conn, ensureUsdc } from "./helpers/solana";
+import { uiSubscribe } from "./helpers/ui";
 
 const BACKEND = process.env.BACKEND ?? "http://localhost:18080";
 const UI = process.env.UI ?? "http://localhost:8081";
@@ -17,6 +20,11 @@ const FLOW = "phantom ext: real chrome + phantom extension → create test walle
 test(`${FLOW}`, async ({ playwright }) => {
   test.setTimeout(240_000);
   fs.mkdirSync(CAPTURES, { recursive: true });
+  // the phantom profile wallet is reused across runs; drop its old account so
+  // shop/subscription limits start clean (cascades to shops and orders)
+  execSync(
+    `docker exec solsulsol-e2e-postgres-test-1 psql -U pos_test -d pos_test -c 'TRUNCATE users CASCADE'`,
+  );
 
   const ctx = await playwright.chromium.launchPersistentContext(PROFILE_DIR, {
     channel: "chromium",
@@ -153,16 +161,42 @@ test(`${FLOW}`, async ({ playwright }) => {
     );
     await pos.screenshot({ path: path.join(CAPTURES, "pos-with-phantom.png") });
 
-    // phantom on the pay screen: run a sale, connect the wallet, capture the approval
-    const email = `ext-${rand()}@test.dev`;
-    const password = "hunter2234";
-    await pos.locator('input[placeholder="email"]').fill(email);
-    await pos.locator('input[placeholder="password"]').fill(password);
-    await pos.getByRole("button", { name: "Register" }).click();
-    await expect(pos.locator(".toast.success")).toContainText("registered");
-    await pos.getByRole("button", { name: "Login", exact: true }).click();
-    await expect(pos.locator('[aria-label="new-shop"]')).toBeVisible({ timeout: 15_000 });
+    // phantom on the pay screen: sign in with the REAL phantom extension,
+    // subscribe, then run a sale and capture the approval
+    await ensureUsdc(conn());
+
+    // connect: the extension opens an approval popup — capture it, approve
+    const connectClick = pos.locator('[aria-label="connect-wallet"]').first().click();
+    const connectPopup = await ctx.waitForEvent("page", { timeout: 15_000 }).catch(() => null);
+    if (connectPopup) {
+      await connectPopup.waitForLoadState();
+      await connectPopup.waitForTimeout(2_000);
+      await connectPopup.screenshot({ path: path.join(CAPTURES, "phantom-connect-popup.png") });
+      await connectPopup.getByRole("button", { name: /connect/i }).first().click({ timeout: 20_000 });
+    } else {
+      console.log("[phantom-ext] no connect popup (already trusted)");
+    }
+    await connectClick;
+
+    // signMessage: another popup approval
+    await pos.getByRole("button", { name: "Sign In" }).click();
+    const signPopup = await ctx.waitForEvent("page", { timeout: 20_000 }).catch(() => null);
+    if (signPopup) {
+      await signPopup.waitForLoadState();
+      await signPopup.waitForTimeout(2_000);
+      await signPopup.screenshot({ path: path.join(CAPTURES, "phantom-signin-popup.png") });
+      await signPopup.getByRole("button", { name: /sign|approve|confirm/i }).first().click({ timeout: 20_000 });
+    }
+    await expect(pos.locator('[aria-label="new-shop"]')).toBeVisible({ timeout: 20_000 });
+
+    // $1/mo subscription — no tabbar before a shop exists; the subscription
+    // payment comes from the surfpool test payer (extension wallet secret is
+    // locked, and it has no USDC anyway)
     await pos.locator('[aria-label="new-shop"]').click();
+    await expect(pos.locator(".modal-overlay")).toContainText("Subscription required", { timeout: 15_000 });
+    await uiSubscribe(pos);
+
+    await expect(pos.locator('input[placeholder="new shop name"]')).toBeVisible({ timeout: 20_000 });
     await pos.locator('input[placeholder="new shop name"]').fill("Ext Cafe");
     await pos.locator('[aria-label="create-shop"]').click();
     const chip = pos.locator(".shop-chip", { hasText: "Ext Cafe" });
@@ -188,6 +222,8 @@ test(`${FLOW}`, async ({ playwright }) => {
     await tile.click();
     await expect(pos.locator(".total-bar")).toContainText("3.5");
     await pos.locator('[aria-label="new-doc"]').click();
+    await expect(pos.locator('[aria-label="pay-method"]').first()).toBeVisible({ timeout: 15_000 });
+    await pos.locator('[aria-label="pay-method"]').first().click();
     await expect(pos.locator(".qr svg").first()).toBeVisible({ timeout: 15_000 });
     await pos.screenshot({ path: path.join(CAPTURES, "pay-screen-before-connect.png") });
 

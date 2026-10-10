@@ -2,16 +2,31 @@
 //! Intentionally `!Send`-friendly (plain `async fn` in trait): wasm is single-threaded.
 
 use pos_api::schema::{
-    AddDestinationRequest, AddGoodsRequest, CheckoutRequest, CreateShopRequest,
-    DestinationResponse, GoodsResponse, InviteAcceptRequest, InviteRequest, InviteResponse,
-    InvoiceResponse, LoginRequest, LoginResponse, RegisterRequest, Role, ShopMemberResponse,
-    ShopResponse, UpdateMemberRoleRequest, UpdateShopSettingsRequest,
+    AddDestinationRequest, AddGoodsRequest, AuthNonceRequest, AuthNonceResponse, AuthResponse,
+    AuthVerifyRequest, CheckoutRequest, CreatePaymentOrderRequest, CreateShopRequest,
+    DestinationResponse, GoodsResponse, GoodsSalesResponse, InviteAcceptRequest, InviteRequest,
+    InviteResponse, InvoiceResponse, MeResponse, PaymentOrderResponse, Role, ShopMemberResponse,
+    ShopResponse, SubscriptionResponse, UpdateMemberRoleRequest, UpdateShopSettingsRequest,
+    VerifyPaymentRequest,
 };
 use uuid::Uuid;
 
 pub trait ApiClient {
-    async fn register(&self, req: &RegisterRequest) -> Result<Uuid, String>;
-    async fn login(&self, req: &LoginRequest) -> Result<LoginResponse, String>;
+    async fn auth_nonce(&self, req: &AuthNonceRequest) -> Result<AuthNonceResponse, String>;
+    async fn auth_verify(&self, req: &AuthVerifyRequest) -> Result<AuthResponse, String>;
+    async fn auth_logout(&self, token: &str) -> Result<(), String>;
+    async fn auth_me(&self, token: &str) -> Result<MeResponse, String>;
+    async fn create_payment_order(
+        &self,
+        token: &str,
+        req: &CreatePaymentOrderRequest,
+    ) -> Result<PaymentOrderResponse, String>;
+    async fn verify_payment(
+        &self,
+        token: &str,
+        req: &VerifyPaymentRequest,
+    ) -> Result<SubscriptionResponse, String>;
+    async fn subscription_current(&self, token: &str) -> Result<SubscriptionResponse, String>;
     async fn create_shop(
         &self,
         token: &str,
@@ -45,6 +60,11 @@ pub trait ApiClient {
     ) -> Result<(), String>;
     async fn add_goods(&self, token: &str, req: &AddGoodsRequest) -> Result<GoodsResponse, String>;
     async fn list_goods(&self, token: &str, shop_id: Uuid) -> Result<Vec<GoodsResponse>, String>;
+    async fn list_goods_sales(
+        &self,
+        token: &str,
+        shop_id: Uuid,
+    ) -> Result<Vec<GoodsSalesResponse>, String>;
     async fn add_destination(
         &self,
         token: &str,

@@ -1,6 +1,12 @@
 import { test, expect } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
+import { apiAuth, conn, ensureUsdc, freshWallet } from "./helpers/solana";
+import { injectMockWallet, gotoUi, uiSignIn, uiSubscribe, saveVideo } from "./helpers/ui";
+
+test.afterEach(async ({ page }) => {
+  await saveVideo(page, "ui_flow");
+});
 
 let stepNo = 0;
 async function shot(page: any, dir: string, name: string) {
@@ -14,7 +20,7 @@ async function shot(page: any, dir: string, name: string) {
 const BACKEND = process.env.BACKEND ?? "http://localhost:18080";
 const UI = process.env.UI ?? "http://localhost:8081";
 
-const rand = () => Math.random().toString(36).slice(2, 10);
+const ADDRESS = "4Nd1mBQtrMJVYDfZS3vNs3p8zQH4wVzLB6s5aXKc9PqR";
 
 async function api(method: string, apiPath: string, token?: string, body?: unknown) {
   return request.fetch(`${BACKEND}${apiPath}`, {
@@ -34,7 +40,7 @@ test.beforeEach(({ request: r }) => {
   stepNo = 0;
 });
 
-const FLOW = "ui: signup → shop → goods → wallet → sell → qr capture screen";
+const FLOW = "ui: wallet signin → subscribe → shop → goods → wallet → sell → qr capture screen";
 
 test(`${FLOW} — desktop`, async ({ page }) => {
   await runFlow(page);
@@ -45,32 +51,33 @@ test(`${FLOW} — mobile`, async ({ page }) => {
   await runFlow(page, "ui_flow_mobile");
 });
 
+
+
 async function runFlow(page: any, dir = "ui_flow") {
-  test.setTimeout(60_000);
-  const email = `ui-owner-${rand()}@test.dev`;
-  const password = "hunter2234";
-  const address = "4Nd1mBQtrMJVYDfZS3vNs3p8zQH4wVzLB6s5aXKc9PqR";
+  test.setTimeout(90_000);
+  const wallet = freshWallet();
+  await ensureUsdc(conn());
+  await injectMockWallet(page, wallet);
 
-  // 01: login screen (icon brand)
+  // 01: login screen (wallet connect card)
+  await gotoUi(page);
   await shot(page, dir, "01-login-screen-icon-brand");
-  await page.goto(`${UI}/?api=${encodeURIComponent(BACKEND)}`);
-  await expect(page.locator("h1")).toHaveText("solsulsol");
 
-  // 02: register
-  await shot(page, dir, "02-register");
-  await page.locator('input[placeholder="email"]').fill(email);
-  await page.locator('input[placeholder="password"]').fill(password);
-  await page.getByRole("button", { name: "Register" }).click();
-  await expect(page.locator(".toast.success")).toContainText("registered");
+  // 02: connect mock Phantom → sign in → dashboard
+  await shot(page, dir, "02-connect-wallet-sign-in");
+  await uiSignIn(page);
 
-  // 03: login → shop select page
-  await shot(page, dir, "03-login-shop-select-page");
-  await page.getByRole("button", { name: "Login", exact: true }).click();
-  await expect(page.locator('[aria-label="new-shop"]')).toBeVisible({ timeout: 15_000 });
-
-  // 04: create shop via modal
-  await shot(page, dir, "04-create-shop-via-modal");
+  // 03: + New shop while unpaid → subscription gate modal → pay inside it
   await page.locator('[aria-label="new-shop"]').click();
+  await expect(page.locator(".modal-overlay")).toContainText("Subscription required", {
+    timeout: 15_000,
+  });
+  await shot(page, dir, "03-subscribe-in-new-shop-gate-modal");
+  await uiSubscribe(page);
+
+  // 04: payment confirmed → shop form appears in the same modal → create shop
+  await expect(page.locator('input[placeholder="new shop name"]')).toBeVisible({ timeout: 20_000 });
+  await shot(page, dir, "04-create-shop-via-modal");
   await page.locator('input[placeholder="new shop name"]').fill("UI Cafe");
   await page.locator('[aria-label="create-shop"]').click();
   const shopChip = page.locator(".shop-chip", { hasText: "UI Cafe" });
@@ -90,6 +97,8 @@ async function runFlow(page: any, dir = "ui_flow") {
   await page.locator('input[placeholder="price"]').fill("3.5");
   await page.locator('input[placeholder="cost"]').fill("1.2");
   await page.locator('input[placeholder="units"]').fill("10");
+  await page.locator('[aria-label="goods-type"]').selectOption("food");
+  await shot(page, dir, "06b-goods-form-type-dropdown-all-icons-colors");
   await page.locator('[aria-label="add-goods"]').click();
   const goodsRow = page.locator("tr", { hasText: "espresso" });
   await expect(goodsRow).toBeVisible({ timeout: 15_000 });
@@ -99,7 +108,7 @@ async function runFlow(page: any, dir = "ui_flow") {
   await shot(page, dir, "07-settings-payments-group-add-solana-recei");
   await page.locator('[aria-label="tab-settings"]').click();
   await page.locator('[aria-label="section-add-account"]').click();
-  await page.locator('input[placeholder="address"]').fill(address);
+  await page.locator('input[placeholder="address"]').fill(ADDRESS);
   await page.locator('[aria-label="add-destination"]').click();
   // success lands back on the Receive accounts section
   await expect(page.locator(".list-row", { hasText: "Solana" })).toBeVisible({ timeout: 15_000 });
@@ -140,9 +149,13 @@ async function runFlow(page: any, dir = "ui_flow") {
   await latte.click();
   await expect(page.locator(".total-bar")).toContainText("3.5");
 
-  // 09: confirm → billing QR with countdown
+  // 09: confirm → choose payment method → billing QR with countdown
   await shot(page, dir, "09-confirm-billing-qr-with-countdown");
   await page.locator('[aria-label="new-doc"]').click();
+  await expect(page.locator('[aria-label="pay-method"]').first()).toBeVisible({ timeout: 15_000 });
+  await page.waitForTimeout(300);
+  await shot(page, dir, "09a-choose-payment-method-sheet");
+  await page.locator('[aria-label="pay-method"]').first().click();
   const qr = page.locator(".qr svg").first();
   await expect(qr).toBeVisible({ timeout: 15_000 });
   await expect(page.locator(".pay-total").first()).toHaveText(/3\.5/);
@@ -151,8 +164,7 @@ async function runFlow(page: any, dir = "ui_flow") {
 
   // 10: invoice persisted — verify through the API (profit snapshot included)
   await shot(page, dir, "10-invoice-persisted-verify-through-the-api");
-  const login = await api("POST", "/auth/login", undefined, { email, password });
-  const { token } = await login.json();
+  const { token } = await apiAuth(api, wallet);
   const shops = await (await api("GET", "/shops", token)).json();
   const shopId = shops[0].shop_id;
   const billings = await (await api("GET", `/shops/${shopId}/billings`, token)).json();

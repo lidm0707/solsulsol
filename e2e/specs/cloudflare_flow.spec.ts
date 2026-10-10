@@ -1,14 +1,14 @@
 import { test, expect } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
+import { Keypair } from "@solana/web3.js";
+import { apiAuth, conn, ensureUsdc, freshWallet, paySubscription } from "./helpers/solana";
 
 // worker under wrangler dev via docker/docker-compose.cloudflare-e2e.yml
 const BACKEND = process.env.CF_BACKEND ?? "http://localhost:18787";
 const SNAPDIR = path.join(__dirname, "..", "snapshots", "cloudflare_flow");
 const CAPDIR = path.join(__dirname, "..", "captures", "cloudflare_flow");
 const UPDATE = process.env.UPDATE_SNAPSHOTS === "1";
-
-const rand = () => Math.random().toString(36).slice(2, 10);
 
 let request: any;
 let stepNo = 0;
@@ -25,14 +25,29 @@ function api(method: string, path: string, token?: string, body?: unknown) {
   });
 }
 
-function mask(value: unknown): unknown {
-  const json = JSON.stringify(value, null, 2) ?? "";
-  const masked = json
+const BASE58 = /[1-9A-HJ-NP-Za-km-z]{32,48}/g;
+
+function maskString(key: string, value: string): string {
+  if (key === "signature") return "<txsig>";
+  if (key === "expires_at") return "<expires_at>";
+  if (key === "nonce") return "<nonce>";
+  // nonce + expiry are embedded in the signed message string
+  return value
     .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, "<uuid>")
-    .replace(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, "<jwt>")
-    .replace(/owner-[a-z0-9]+@/g, "owner-<rand>@")
-    .replace(/member-[a-z0-9]+@/g, "member-<rand>@");
-  return JSON.parse(masked);
+    .replace(/\d{4}-\d{2}-\d{2}T[\d:.]+(\+00:00|Z)/g, "<ts>")
+    .replace(BASE58, "<wallet>");
+}
+
+function mask(value: unknown): unknown {
+  const walk = (v: unknown, key = ""): unknown => {
+    if (typeof v === "string") return maskString(key, v);
+    if (Array.isArray(v)) return v.map((x) => walk(x));
+    if (v && typeof v === "object") {
+      return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, walk(x, k)]));
+    }
+    return v;
+  };
+  return walk(value);
 }
 
 function snapshot(name: string, payload: unknown) {
@@ -92,17 +107,34 @@ test.afterEach(() => {
   expect(failures, "snapshot mismatches").toEqual([]);
 });
 
-test("worker API flow: signup → shop → goods → checkout", async () => {
-  const owner = { email: `owner-${rand()}@test.dev`, password: "hunter2234" };
-  const member = { email: `member-${rand()}@test.dev`, password: "hunter2234" };
+test("worker API flow: wallet auth → subscribe → shop → goods → checkout", async () => {
+  await ensureUsdc(conn());
+  const owner = freshWallet();
+  // member wallet is fresh per run; its address is masked in snapshots anyway
+  const member = Keypair.generate();
 
-  const reg = await api("POST", "/auth/register", undefined, owner);
-  snapshot("register-owner", { status: reg.status(), body: await reg.json().catch(() => null) });
-  const login = await api("POST", "/auth/login", undefined, owner);
-  const { token, user_id }: { token: string; user_id: string } = await login.json();
-  await step("login-owner", login);
+  const nonce = await api("POST", "/auth/nonce", undefined, {
+    wallet: owner.publicKey.toBase58(),
+  });
+  await step("auth-nonce-owner", nonce);
+  const { token, user_id }: { token: string; user_id: string } = await apiAuth(api, owner);
+  snapshot("auth-verify-owner", {
+    status: 200,
+    body: { token: "<jwt>", user_id, wallet: "<wallet>" },
+  });
   expect(token).toBeTruthy();
   expect(user_id).toBeTruthy();
+
+  // $1/mo USDC subscription is required before shop creation
+  const order = await api("POST", "/payments/orders", token, {});
+  const orderBody = await step("create-order", order);
+  const signature = await paySubscription(conn());
+  const verified = await api("POST", "/payments/verify", token, {
+    order_id: orderBody.order_id,
+    signature,
+  });
+  const verifyBody = await step("verify-payment", verified);
+  expect(verifyBody.status).toBe("active");
 
   const shop = await api("POST", "/shops", token, { name: "CF E2E Cafe" });
   const { shop_id }: { shop_id: string } = await shop.json();
@@ -114,18 +146,17 @@ test("worker API flow: signup → shop → goods → checkout", async () => {
 
   const invite = await api("POST", `/shops/${shop_id}/invites`, token, {
     shop_id,
-    email: member.email,
+    email: "member@cf-e2e.test",
     role: "employee",
   });
   const { invite_id } = await step("invite-member", invite);
 
-  await api("POST", "/auth/register", undefined, member);
-  const mlogin = await api("POST", "/auth/login", undefined, member);
-  const { token: mtoken }: { token: string } = await mlogin.json();
-  await step("login-member", mlogin);
-  const accepted = await api("POST", `/invites/${invite_id}/accept`, mtoken, {
-    password: member.password,
+  const mnonce = await api("POST", "/auth/nonce", undefined, {
+    wallet: member.publicKey.toBase58(),
   });
+  await step("auth-nonce-member", mnonce);
+  const { token: mtoken } = await apiAuth(api, member);
+  const accepted = await api("POST", `/invites/${invite_id}/accept`, mtoken, {});
   await step("accept-invite", accepted);
 
   const forbidden = await api("POST", `/shops/${shop_id}/goods`, mtoken, {
@@ -158,6 +189,10 @@ test("worker API flow: signup → shop → goods → checkout", async () => {
   const invoice = await step("checkout", checkout);
   expect(invoice.qr_payload).toContain("solana:");
   expect(invoice.total).toBe("3.5");
+
+  const logout = await api("POST", "/auth/logout", token, {});
+  await step("logout-owner", logout);
+  expect(logout.status()).toBeLessThan(400);
 });
 
 test("worker captures: health, ui assets", async ({ page }) => {

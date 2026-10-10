@@ -8,6 +8,8 @@ prompt/
 docker/.local-pay/
 qr-pay.png
 e2e/captures/
+e2e/videos/
 e2e/.phantom/
 test-results/
 wrangler.toml
+.solana/

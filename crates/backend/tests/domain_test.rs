@@ -2,14 +2,14 @@ use rust_decimal::Decimal;
 use uuid::Uuid;
 
 use pos_backend::domain::entities::{
-    Invite, InviteStatus, Invoice, InvoiceLine, InvoiceStatus, Order, PaymentDestination, Shop,
-    User, VatMode,
+    Currency, Invite, InviteStatus, Invoice, InvoiceLine, InvoiceStatus, Order, PaymentDestination,
+    Shop, User, VatMode,
 };
 use pos_backend::domain::services::{
     DomainRuleError, accept_invite, can_change_role, can_invite, invoice_can_transition,
     validate_order,
 };
-use pos_backend::domain::value_objects::{Chain, ChainAddress, Email, Money, PasswordHash, Role, SplToken};
+use pos_backend::domain::value_objects::{Chain, ChainAddress, Email, Money, Role, SplToken};
 
 const SOL_ADDRESS: &str = "4Nd1mBQtrMJVYDfZS3vNs3p8zQH4wVzLB6s5aXKc9PqR";
 const BTC_ADDRESS: &str = "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4";
@@ -22,6 +22,9 @@ fn shop_with_vat() -> Shop {
         name: "test shop".to_owned(),
         vat_mode: VatMode::None,
         vat_rate: Decimal::ZERO,
+        fx_thb_per_sol: Decimal::ZERO,
+        currency: Currency::default(),
+        deleted_at: None,
     }
 }
 
@@ -35,7 +38,7 @@ fn money(amount: i64) -> Money {
 
 fn line(price: i64, qty: u32) -> InvoiceLine {
     InvoiceLine {
-        product_id: Uuid::now_v7(),
+        goods_id: Uuid::now_v7(),
         name: "widget".to_owned(),
         price: money(price),
         cost: Decimal::from(1),
@@ -55,7 +58,7 @@ fn sol_destination() -> PaymentDestination {
 
 struct TestPromptPay;
 
-impl pos_backend::port::PromptPayEncoder for TestPromptPay {
+impl pos_backend::port::promptpay::PromptPayEncoder for TestPromptPay {
     fn target(&self, raw: &str) -> String {
         raw.to_owned()
     }
@@ -119,8 +122,8 @@ fn role_hierarchy_gates_invites_and_role_changes() {
 fn invite_accepts_only_when_pending_unexpired_and_email_matches() {
     let user = User {
         id: Uuid::now_v7(),
-        email: email("a@b.com"),
-        password: PasswordHash::from_hash("hash".to_owned()),
+        email: Some(email("a@b.com")),
+        wallet: None,
         role: Role::Employee,
         created_at: NOW,
     };
@@ -142,10 +145,20 @@ fn invite_accepts_only_when_pending_unexpired_and_email_matches() {
     assert!(accept_invite(&expired, &user, NOW).is_err());
 
     let other_user = User {
-        email: email("c@d.com"),
+        email: Some(email("c@d.com")),
         ..user
     };
     assert!(accept_invite(&invite, &other_user, NOW).is_err());
+
+    // Wallet-only users (no linked email) accept by invite id capability.
+    let wallet_user = User {
+        email: None,
+        wallet: None,
+        id: Uuid::now_v7(),
+        role: Role::Employee,
+        created_at: NOW,
+    };
+    assert!(accept_invite(&invite, &wallet_user, NOW).is_ok());
 }
 
 #[test]

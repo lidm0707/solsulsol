@@ -1,12 +1,12 @@
 import { test, expect } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
+import { Keypair } from "@solana/web3.js";
+import { apiAuth, conn, ensureUsdc, freshWallet, paySubscription } from "./helpers/solana";
 
 const BACKEND = process.env.BACKEND ?? "http://localhost:18080";
 const SNAPDIR = path.join(__dirname, "..", "snapshots", "pos_flow");
 const UPDATE = process.env.UPDATE_SNAPSHOTS === "1";
-
-const rand = () => Math.random().toString(36).slice(2, 10);
 
 let request: any;
 let stepNo = 0;
@@ -29,8 +29,15 @@ function mask(value: unknown): unknown {
   const masked = json
     .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, "<uuid>")
     .replace(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, "<jwt>")
-    .replace(/owner-[a-z0-9]+@/g, "owner-<rand>@")
-    .replace(/member-[a-z0-9]+@/g, "member-<rand>@");
+    .replace(/"signature":\s*"[^"]*"/g, '"signature": "<txsig>"')
+    .replace(/"wallet":\s*"[^"]*"/g, '"wallet": "<wallet>"')
+    .replace(/member-[0-9a-z]+@test\.dev/g, "member-<rand>@test.dev")
+    // wallet-only members have no email; their label is the base58 pubkey
+    .replace(/"email": "[1-9A-HJ-NP-Za-km-z]{32,48}"/g, '"email": "<wallet>"')
+    .replace(
+      /"(created_at|expires_at|started_at|grace_until)":\s*"[^"]*"/g,
+      '"$1": "<ts>"',
+    );
   return JSON.parse(masked);
 }
 
@@ -74,53 +81,60 @@ test.afterEach(() => {
   expect(failures, "snapshot mismatches").toEqual([]);
 });
 
-test("signup → shop → invite → goods → checkout → PDF/QR", async () => {
-  const owner = { email: `owner-${rand()}@test.dev`, password: "hunter2234" };
-  const member = { email: `member-${rand()}@test.dev`, password: "hunter2234" };
+test("wallet auth → subscribe → shop → invite → goods → checkout → PDF/QR", async () => {
+  const owner = freshWallet();
+  const member = Keypair.generate();
+  const memberEmail = `member-${Math.random().toString(36).slice(2, 10)}@test.dev`;
 
-  // 01–02: owner signup + login
-  const reg = await api("POST", "/auth/register", undefined, owner);
-  snapshot("register-owner", { status: reg.status(), body: await reg.json().catch(() => null) });
-  const login = await api("POST", "/auth/login", undefined, owner);
-  const { token, user_id }: { token: string; user_id: string } = await login.json();
-  await step("login-owner", login);
-  expect(token).toBeTruthy();
-  expect(user_id).toBeTruthy();
+  // 01–02: owner wallet auth (nonce → sign → verify)
+  await ensureUsdc(conn());
+  const auth = await apiAuth(api, owner);
+  const token = auth.token;
+  const me = await api("GET", "/auth/me", token);
+  await step("auth-owner", me);
 
-  // 03: create shop
+  // 03–05: $1/mo subscription — order, on-chain pay, verify
+  const order = await api("POST", "/payments/orders", token, {});
+  const { order_id } = await step("create-payment-order", order);
+  const sig = await paySubscription(conn());
+  const verify = await api("POST", "/payments/verify", token, {
+    order_id,
+    signature: sig,
+  });
+  const sub = await step("verify-payment", verify);
+  expect(sub.status).toBe("active");
+
+  // 06: create shop (requires active subscription)
   const shop = await api("POST", "/shops", token, { name: "E2E Cafe" });
   const { shop_id }: { shop_id: string } = await shop.json();
   await step("create-shop", shop);
 
-  // 04: anonymous request is rejected
+  // 07: anonymous request is rejected
   const anon = await api("GET", "/shops");
   snapshot("shops-unauthorized", { status: anon.status(), body: await anon.json().catch(() => null) });
   expect(anon.status()).toBe(401);
 
-  // 05: invite member
+  // 08: invite member
   const invite = await api("POST", `/shops/${shop_id}/invites`, token, {
     shop_id,
-    email: member.email,
+    email: memberEmail,
     role: "employee",
   });
   const { invite_id } = await step("invite-member", invite);
 
-  // 06–08: member registers, logs in, accepts invite
-  const mreg = await api("POST", "/auth/register", undefined, member);
-  snapshot("register-member", { status: mreg.status(), body: await mreg.json().catch(() => null) });
-  const mlogin = await api("POST", "/auth/login", undefined, member);
-  const { token: mtoken }: { token: string } = await mlogin.json();
-  await step("login-member", mlogin);
-  const accepted = await api("POST", `/invites/${invite_id}/accept`, mtoken, {
-    password: member.password,
-  });
+  // 09–10: member wallet auth, accepts invite
+  const mauth = await apiAuth(api, member);
+  const mtoken = mauth.token;
+  const mme = await api("GET", "/auth/me", mtoken);
+  await step("auth-member", mme);
+  const accepted = await api("POST", `/invites/${invite_id}/accept`, mtoken, {});
   await step("accept-invite", accepted);
 
-  // 09: employee may list goods…
+  // 11: employee may list goods…
   const listGoods = await api("GET", `/shops/${shop_id}/goods`, mtoken);
   await step("list-goods-employee", listGoods);
 
-  // 10: …but not add them (403)
+  // 12: …but not add them (403)
   const forbidden = await api("POST", `/shops/${shop_id}/goods`, mtoken, {
     shop_id,
     name: "x",
@@ -129,7 +143,7 @@ test("signup → shop → invite → goods → checkout → PDF/QR", async () =>
   snapshot("add-goods-forbidden", { status: forbidden.status(), body: await forbidden.json().catch(() => null) });
   expect(forbidden.status()).toBe(403);
 
-  // 11: owner adds goods
+  // 13: owner adds goods
   const goods = await api("POST", `/shops/${shop_id}/goods`, token, {
     shop_id,
     name: "espresso",
@@ -137,7 +151,7 @@ test("signup → shop → invite → goods → checkout → PDF/QR", async () =>
   });
   const { goods_id } = await step("add-goods", goods);
 
-  // 12: owner adds payment destination
+  // 14: owner adds payment destination
   const dest = await api("POST", `/shops/${shop_id}/destinations`, token, {
     shop_id,
     chain: "solana",
@@ -145,7 +159,7 @@ test("signup → shop → invite → goods → checkout → PDF/QR", async () =>
   });
   const { destination_id } = await step("add-destination", dest);
 
-  // 13: checkout → invoice
+  // 15: checkout → invoice
   const checkout = await api("POST", `/shops/${shop_id}/checkout`, token, {
     shop_id,
     goods_ids: [goods_id],
@@ -156,7 +170,7 @@ test("signup → shop → invite → goods → checkout → PDF/QR", async () =>
   expect(invoice.qr_payload).toContain("amount=3.5");
   expect(invoice.total).toBe("3.5");
 
-  // 14: invoice PDF
+  // 16: invoice PDF
   const pdf = await request.fetch(`${BACKEND}${invoice.pdf_url}`, {
     headers: { Authorization: `Bearer ${token}` },
   });
@@ -170,4 +184,13 @@ test("signup → shop → invite → goods → checkout → PDF/QR", async () =>
   expect(pdf.ok()).toBeTruthy();
   expect(pdf.headers()["content-type"]).toBe("application/pdf");
   expect(bytes.subarray(0, 4)).toEqual(Buffer.from("%PDF"));
+
+  // 17: shop creation without an active subscription is 403
+  const noSub = await apiAuth(api, Keypair.generate());
+  const blocked = await api("POST", "/shops", noSub.token, { name: "No Sub Cafe" });
+  snapshot("create-shop-without-subscription", {
+    status: blocked.status(),
+    body: await blocked.json().catch(() => null),
+  });
+  expect(blocked.status()).toBe(403);
 });

@@ -10,6 +10,21 @@ binding = "my_db"
 database_name = "my-db"
 database_id = "your-db-id"
 
+[[r2_buckets]]
+binding = "OBJECTS"
+bucket_name = "your-bucket-name"
+
+[vars]
+SOLANA_NETWORK = "devnet"
+SOLANA_RPC_URL = "https://api.devnet.solana.com"
+USDC_MINT = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
+PAYMENT_RECIPIENT = "REPLACE_WITH_YOUR_WALLET_ADDRESS"
+POS_DOMAIN = "localhost"
+NONCE_TTL_SECS = "300"
+GRACE_DAYS = "30"
+RECOVERY_DAYS = "7"
+# R2_MAX_UPLOAD_BYTES = "10485760"
+
 [assets]
 directory = "../ui/ui_wasm/dist"
 binding = "ASSETS"

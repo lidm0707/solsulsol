@@ -4,13 +4,18 @@
 use async_trait::async_trait;
 use sqlx::PgPool;
 
-use crate::domain::entities::{
-    Invite, InviteStatus, Invoice, InvoiceLine, InvoiceStatus, PaymentDestination, Product, Shop,
-    ShopMember, User, VatMode,
+use crate::domain::entities::subscription::{
+    AuthNonce, PaymentOrder, PaymentOrderStatus, Subscription, SubscriptionStatus,
 };
-use crate::domain::value_objects::{Chain, ChainAddress, Email, Money, PasswordHash, Role, SplToken};
-use crate::port::{
-    DestinationRepo, InviteRepo, InvoiceRepo, ProductRepo, ShopMemberRepo, ShopRepo, Tx, TxManager,
+use crate::domain::entities::{
+    Currency, Goods, Invite, InviteStatus, Invoice, InvoiceLine, InvoiceStatus, PaymentDestination,
+    Shop, ShopMember, User, VatMode,
+};
+use crate::domain::value_objects::{Chain, ChainAddress, Email, Money, Role, SplToken, Wallet};
+use crate::domain::value_objects::{GoodsIcon, GoodsType, PastelColor};
+use crate::port::database::{
+    DestinationRepo, GoodsRepo, InviteRepo, InvoiceRepo, NonceRepo, PaymentOrderRepo,
+    ShopMemberRepo, ShopRepo, StorageError, StorageUsageRepo, SubscriptionRepo, Tx, TxManager,
     UserRepo,
 };
 use rust_decimal::Decimal;
@@ -29,15 +34,17 @@ pub struct PgUserRepo {
     pub pool: PgPool,
 }
 
+const USER_COLUMNS: &str = "id, email, wallet, role, created_at";
+
 #[async_trait]
 impl UserRepo for PgUserRepo {
     async fn insert(&self, user: &User) -> Result<(), String> {
         sqlx::query(
-            "INSERT INTO users (id, email, password_hash, role, created_at) VALUES ($1, $2, $3, $4, $5)",
+            "INSERT INTO users (id, email, wallet, role, created_at) VALUES ($1, $2, $3, $4, $5)",
         )
         .bind(user.id)
-        .bind(user.email.as_str())
-        .bind(user.password.as_str())
+        .bind(user.email.as_ref().map(Email::as_str))
+        .bind(user.wallet.as_ref().map(Wallet::as_str))
         .bind(user.role.as_str())
         .bind(user.created_at)
         .execute(&self.pool)
@@ -46,34 +53,21 @@ impl UserRepo for PgUserRepo {
         Ok(())
     }
 
-    async fn find_by_email(&self, email: &str) -> Result<Option<User>, String> {
-        let row: Option<(
-            uuid::Uuid,
-            String,
-            String,
-            String,
-            chrono::DateTime<chrono::Utc>,
-        )> = sqlx::query_as(
-            "SELECT id, email, password_hash, role, created_at FROM users WHERE email = $1",
-        )
-        .bind(email)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| e.to_string())?;
+    async fn find_by_id(&self, id: uuid::Uuid) -> Result<Option<User>, String> {
+        let row: Option<UserTuple> =
+            sqlx::query_as(&format!("SELECT {USER_COLUMNS} FROM users WHERE id = $1"))
+                .bind(id)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(|e| e.to_string())?;
         Ok(row.map(user_row))
     }
 
-    async fn find_by_id(&self, id: uuid::Uuid) -> Result<Option<User>, String> {
-        let row: Option<(
-            uuid::Uuid,
-            String,
-            String,
-            String,
-            chrono::DateTime<chrono::Utc>,
-        )> = sqlx::query_as(
-            "SELECT id, email, password_hash, role, created_at FROM users WHERE id = $1",
-        )
-        .bind(id)
+    async fn find_by_wallet(&self, wallet: &str) -> Result<Option<User>, String> {
+        let row: Option<UserTuple> = sqlx::query_as(&format!(
+            "SELECT {USER_COLUMNS} FROM users WHERE wallet = $1"
+        ))
+        .bind(wallet)
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| e.to_string())?;
@@ -83,18 +77,18 @@ impl UserRepo for PgUserRepo {
 
 type UserTuple = (
     uuid::Uuid,
-    String,
-    String,
+    Option<String>,
+    Option<String>,
     String,
     chrono::DateTime<chrono::Utc>,
 );
 
 fn user_row(row: UserTuple) -> User {
-    let (id, email, password_hash, role, created_at) = row;
+    let (id, email, wallet, role, created_at) = row;
     User {
         id,
-        email: Email::parse(&email).unwrap_or_else(|_| Email::unchecked(email)),
-        password: PasswordHash::from_hash(password_hash),
+        email: email.map(|e| Email::parse(&e).unwrap_or_else(|_| Email::unchecked(e))),
+        wallet: wallet.map(|w| Wallet::parse(&w).unwrap_or_else(|_| Wallet::unchecked(w))),
         role: Role::parse(&role).unwrap_or(Role::Employee),
         created_at,
     }
@@ -104,16 +98,28 @@ pub struct PgShopRepo {
     pub pool: PgPool,
 }
 
-type ShopTuple = (uuid::Uuid, uuid::Uuid, String, String, Decimal);
+type ShopTuple = (
+    uuid::Uuid,
+    uuid::Uuid,
+    String,
+    String,
+    Decimal,
+    Decimal,
+    String,
+    Option<chrono::DateTime<chrono::Utc>>,
+);
 
 fn shop_row(row: ShopTuple) -> Shop {
-    let (id, owner_id, name, vat_mode, vat_rate) = row;
+    let (id, owner_id, name, vat_mode, vat_rate, fx_thb_per_sol, currency, deleted_at) = row;
     Shop {
         id,
         owner_id,
         name,
         vat_mode: VatMode::parse(&vat_mode).unwrap_or_default(),
         vat_rate,
+        fx_thb_per_sol,
+        currency: Currency::parse(&currency).unwrap_or_default(),
+        deleted_at,
     }
 }
 
@@ -121,13 +127,16 @@ fn shop_row(row: ShopTuple) -> Shop {
 impl ShopRepo for PgShopRepo {
     async fn insert(&self, shop: &Shop) -> Result<(), String> {
         sqlx::query(
-            "INSERT INTO shops (id, owner_id, name, vat_mode, vat_rate) VALUES ($1, $2, $3, $4, $5)",
+            "INSERT INTO shops (id, owner_id, name, vat_mode, vat_rate, fx_thb_per_sol, currency, deleted_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
         )
         .bind(shop.id)
         .bind(shop.owner_id)
         .bind(&shop.name)
         .bind(shop.vat_mode.as_str())
         .bind(shop.vat_rate)
+        .bind(shop.fx_thb_per_sol)
+        .bind(shop.currency.as_str())
+        .bind(shop.deleted_at)
         .execute(&self.pool)
         .await
         .map_err(|e| e.to_string())?;
@@ -136,7 +145,8 @@ impl ShopRepo for PgShopRepo {
 
     async fn find_by_id(&self, id: uuid::Uuid) -> Result<Option<Shop>, String> {
         let row: Option<ShopTuple> = sqlx::query_as(
-            "SELECT id, owner_id, name, vat_mode, vat_rate FROM shops WHERE id = $1",
+            "SELECT id, owner_id, name, vat_mode, vat_rate, fx_thb_per_sol, currency, deleted_at FROM shops \
+             WHERE id = $1 AND deleted_at IS NULL",
         )
         .bind(id)
         .fetch_optional(&self.pool)
@@ -147,8 +157,9 @@ impl ShopRepo for PgShopRepo {
 
     async fn find_for_user(&self, user_id: uuid::Uuid) -> Result<Vec<Shop>, String> {
         let rows: Vec<ShopTuple> = sqlx::query_as(
-            "SELECT s.id, s.owner_id, s.name, s.vat_mode, s.vat_rate FROM shops s \
-             JOIN shop_members m ON m.shop_id = s.id WHERE m.user_id = $1",
+            "SELECT s.id, s.owner_id, s.name, s.vat_mode, s.vat_rate, s.fx_thb_per_sol, s.currency, s.deleted_at \
+             FROM shops s JOIN shop_members m ON m.shop_id = s.id \
+             WHERE m.user_id = $1 AND s.deleted_at IS NULL",
         )
         .bind(user_id)
         .fetch_all(&self.pool)
@@ -162,15 +173,49 @@ impl ShopRepo for PgShopRepo {
         id: uuid::Uuid,
         vat_mode: VatMode,
         vat_rate: Decimal,
+        fx_thb_per_sol: Decimal,
+        currency: Currency,
     ) -> Result<(), String> {
-        sqlx::query("UPDATE shops SET vat_mode = $2, vat_rate = $3 WHERE id = $1")
-            .bind(id)
-            .bind(vat_mode.as_str())
-            .bind(vat_rate)
+        sqlx::query(
+            "UPDATE shops SET vat_mode = $2, vat_rate = $3, fx_thb_per_sol = $4, currency = $5 WHERE id = $1",
+        )
+        .bind(id)
+        .bind(vat_mode.as_str())
+        .bind(vat_rate)
+        .bind(fx_thb_per_sol)
+        .bind(currency.as_str())
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    async fn soft_delete_for_owner(
+        &self,
+        owner_id: uuid::Uuid,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<u64, String> {
+        let res = sqlx::query(
+            "UPDATE shops SET deleted_at = $2 WHERE owner_id = $1 AND deleted_at IS NULL",
+        )
+        .bind(owner_id)
+        .bind(now)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(res.rows_affected())
+    }
+
+    async fn hard_delete_expired(
+        &self,
+        before: chrono::DateTime<chrono::Utc>,
+    ) -> Result<u64, String> {
+        let res = sqlx::query("DELETE FROM shops WHERE deleted_at IS NOT NULL AND deleted_at < $1")
+            .bind(before)
             .execute(&self.pool)
             .await
             .map_err(|e| e.to_string())?;
-        Ok(())
+        Ok(res.rows_affected())
     }
 }
 
@@ -244,11 +289,11 @@ impl ShopMemberRepo for PgMemberRepo {
     }
 }
 
-pub struct PgProductRepo {
+pub struct PgGoodsRepo {
     pub pool: PgPool,
 }
 
-type ProductTuple = (
+type GoodsTuple = (
     uuid::Uuid,
     uuid::Uuid,
     String,
@@ -256,11 +301,14 @@ type ProductTuple = (
     rust_decimal::Decimal,
     i64,
     Option<String>,
+    String,
+    String,
+    String,
 );
 
-fn product_row(row: ProductTuple) -> Product {
-    let (id, shop_id, name, price, cost, units, barcode) = row;
-    Product {
+fn goods_row(row: GoodsTuple) -> Goods {
+    let (id, shop_id, name, price, cost, units, barcode, icon, color, goods_type) = row;
+    Goods {
         id,
         shop_id,
         name,
@@ -268,47 +316,53 @@ fn product_row(row: ProductTuple) -> Product {
         cost,
         units,
         barcode,
+        icon: GoodsIcon::parse(&icon).unwrap_or_default(),
+        color: PastelColor::parse(&color).unwrap_or_default(),
+        goods_type: GoodsType::parse(&goods_type).unwrap_or_default(),
     }
 }
 
 #[async_trait]
-impl ProductRepo for PgProductRepo {
-    async fn insert(&self, product: &Product) -> Result<(), String> {
+impl GoodsRepo for PgGoodsRepo {
+    async fn insert(&self, goods: &Goods) -> Result<(), String> {
         sqlx::query(
-            "INSERT INTO products (id, shop_id, name, price, cost, units, barcode) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+            "INSERT INTO goods (id, shop_id, name, price, cost, units, barcode, icon, color, goods_type) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
         )
-        .bind(product.id)
-        .bind(product.shop_id)
-        .bind(&product.name)
-        .bind(product.price.amount())
-        .bind(product.cost)
-        .bind(product.units)
-        .bind(&product.barcode)
+        .bind(goods.id)
+        .bind(goods.shop_id)
+        .bind(&goods.name)
+        .bind(goods.price.amount())
+        .bind(goods.cost)
+        .bind(goods.units)
+        .bind(&goods.barcode)
+        .bind(goods.icon.as_str())
+        .bind(goods.color.as_str())
+        .bind(goods.goods_type.as_str())
         .execute(&self.pool)
         .await
         .map_err(|e| e.to_string())?;
         Ok(())
     }
 
-    async fn find_by_shop(&self, shop_id: uuid::Uuid) -> Result<Vec<Product>, String> {
-        let rows: Vec<ProductTuple> = sqlx::query_as(
-            "SELECT id, shop_id, name, price, cost, units, barcode FROM products WHERE shop_id = $1",
+    async fn find_by_shop(&self, shop_id: uuid::Uuid) -> Result<Vec<Goods>, String> {
+        let rows: Vec<GoodsTuple> = sqlx::query_as(
+            "SELECT id, shop_id, name, price, cost, units, barcode, icon, color, goods_type FROM goods WHERE shop_id = $1",
         )
         .bind(shop_id)
         .fetch_all(&self.pool)
         .await
         .map_err(|e| e.to_string())?;
-        Ok(rows.into_iter().map(product_row).collect())
+        Ok(rows.into_iter().map(goods_row).collect())
     }
 
-    async fn take_units(&self, product_id: uuid::Uuid) -> Result<(), String> {
-        let res = sqlx::query("UPDATE products SET units = units - 1 WHERE id = $1 AND units > 0")
-            .bind(product_id)
+    async fn take_units(&self, goods_id: uuid::Uuid) -> Result<(), String> {
+        let res = sqlx::query("UPDATE goods SET units = units - 1 WHERE id = $1 AND units > 0")
+            .bind(goods_id)
             .execute(&self.pool)
             .await
             .map_err(|e| e.to_string())?;
         if res.rows_affected() == 0 {
-            return Err(String::from("product out of stock"));
+            return Err(String::from("goods out of stock"));
         }
         Ok(())
     }
@@ -350,12 +404,13 @@ impl DestinationRepo for PgDestinationRepo {
     }
 
     async fn find_by_id(&self, id: uuid::Uuid) -> Result<Option<PaymentDestination>, String> {
-        let row: Option<DestinationTuple> =
-            sqlx::query_as("SELECT id, shop_id, chain, address, token FROM destinations WHERE id = $1")
-                .bind(id)
-                .fetch_optional(&self.pool)
-                .await
-                .map_err(|e| e.to_string())?;
+        let row: Option<DestinationTuple> = sqlx::query_as(
+            "SELECT id, shop_id, chain, address, token FROM destinations WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
         Ok(row.map(destination_row))
     }
 
@@ -496,10 +551,10 @@ impl InvoiceRepo for PgInvoiceRepo {
         .map_err(|e| e.to_string())?;
         for line in &invoice.lines {
             sqlx::query(
-                "INSERT INTO invoice_lines (invoice_id, product_id, name, price, cost, qty) VALUES ($1, $2, $3, $4, $5, $6)",
+                "INSERT INTO invoice_lines (invoice_id, goods_id, name, price, cost, qty) VALUES ($1, $2, $3, $4, $5, $6)",
             )
             .bind(invoice.id)
-            .bind(line.product_id)
+            .bind(line.goods_id)
             .bind(&line.name)
             .bind(line.price.amount())
             .bind(line.cost)
@@ -561,6 +616,23 @@ impl InvoiceRepo for PgInvoiceRepo {
         }
         Ok(out)
     }
+
+    async fn sales_by_goods(&self, shop_id: uuid::Uuid) -> Result<Vec<(uuid::Uuid, u64)>, String> {
+        let rows: Vec<(uuid::Uuid, i64)> = sqlx::query_as(
+            "SELECT l.goods_id, SUM(l.qty) FROM invoice_lines l \
+             JOIN invoices i ON i.id = l.invoice_id \
+             WHERE i.shop_id = $1 AND i.status = 'paid' \
+             GROUP BY l.goods_id ORDER BY SUM(l.qty) DESC",
+        )
+        .bind(shop_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(rows
+            .into_iter()
+            .map(|(id, qty)| (id, u64::try_from(qty).unwrap_or(0)))
+            .collect())
+    }
 }
 
 async fn fetch_destination(
@@ -604,7 +676,7 @@ async fn fetch_lines(
         rust_decimal::Decimal,
         i64,
     )> = sqlx::query_as(
-        "SELECT product_id, name, price, cost, qty FROM invoice_lines WHERE invoice_id = $1",
+        "SELECT goods_id, name, price, cost, qty FROM invoice_lines WHERE invoice_id = $1",
     )
     .bind(invoice_id)
     .fetch_all(pool)
@@ -612,8 +684,8 @@ async fn fetch_lines(
     .map_err(|e| e.to_string())?;
     Ok(rows
         .into_iter()
-        .map(|(product_id, name, price, cost, qty)| InvoiceLine {
-            product_id,
+        .map(|(goods_id, name, price, cost, qty)| InvoiceLine {
+            goods_id,
             name,
             price: Money::new(price).unwrap_or_else(|_| Money::one()),
             cost,
@@ -652,5 +724,335 @@ impl Tx for PgTx {
             tx.rollback().await.map_err(|e| e.to_string())?;
         }
         Ok(())
+    }
+}
+
+pub struct PgNonceRepo {
+    pub pool: PgPool,
+}
+
+#[async_trait]
+impl NonceRepo for PgNonceRepo {
+    async fn insert(&self, nonce: &AuthNonce) -> Result<(), String> {
+        sqlx::query(
+            "INSERT INTO auth_nonces (id, wallet, nonce, expires_at) VALUES ($1, $2, $3, $4)",
+        )
+        .bind(nonce.id)
+        .bind(&nonce.wallet)
+        .bind(&nonce.nonce)
+        .bind(nonce.expires_at)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    async fn find(&self, wallet: &str, nonce: &str) -> Result<Option<AuthNonce>, String> {
+        let row: Option<(uuid::Uuid, String, String, chrono::DateTime<chrono::Utc>)> =
+            sqlx::query_as(
+                "SELECT id, wallet, nonce, expires_at FROM auth_nonces \
+                 WHERE wallet = $1 AND nonce = $2 AND used_at IS NULL",
+            )
+            .bind(wallet)
+            .bind(nonce)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(row.map(|(id, wallet, nonce, expires_at)| AuthNonce {
+            id,
+            wallet,
+            nonce,
+            expires_at,
+        }))
+    }
+
+    async fn consume(
+        &self,
+        wallet: &str,
+        nonce: &str,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<bool, String> {
+        let res = sqlx::query(
+            "UPDATE auth_nonces SET used_at = $3 \
+             WHERE wallet = $1 AND nonce = $2 AND used_at IS NULL AND expires_at > $3",
+        )
+        .bind(wallet)
+        .bind(nonce)
+        .bind(now)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(res.rows_affected() == 1)
+    }
+}
+
+pub struct PgSubscriptionRepo {
+    pub pool: PgPool,
+}
+
+type SubTuple = (
+    uuid::Uuid,
+    uuid::Uuid,
+    String,
+    chrono::DateTime<chrono::Utc>,
+    chrono::DateTime<chrono::Utc>,
+    Option<chrono::DateTime<chrono::Utc>>,
+);
+
+fn sub_row(row: SubTuple) -> Subscription {
+    let (id, user_id, status, started_at, expires_at, grace_until) = row;
+    Subscription {
+        id,
+        user_id,
+        status: SubscriptionStatus::parse(&status).unwrap_or(SubscriptionStatus::Grace),
+        started_at,
+        expires_at,
+        grace_until,
+    }
+}
+
+const SUB_COLUMNS: &str = "id, user_id, status, started_at, expires_at, grace_until";
+
+#[async_trait]
+impl SubscriptionRepo for PgSubscriptionRepo {
+    async fn find_by_user(&self, user_id: uuid::Uuid) -> Result<Option<Subscription>, String> {
+        let row: Option<SubTuple> = sqlx::query_as(&format!(
+            "SELECT {SUB_COLUMNS} FROM subscriptions WHERE user_id = $1"
+        ))
+        .bind(user_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(row.map(sub_row))
+    }
+
+    async fn upsert(&self, sub: &Subscription) -> Result<(), String> {
+        sqlx::query(
+            "INSERT INTO subscriptions (id, user_id, status, started_at, expires_at, grace_until) \
+             VALUES ($1, $2, $3, $4, $5, $6) \
+             ON CONFLICT (user_id) DO UPDATE SET \
+             status = EXCLUDED.status, started_at = EXCLUDED.started_at, \
+             expires_at = EXCLUDED.expires_at, grace_until = EXCLUDED.grace_until",
+        )
+        .bind(sub.id)
+        .bind(sub.user_id)
+        .bind(sub.status.as_str())
+        .bind(sub.started_at)
+        .bind(sub.expires_at)
+        .bind(sub.grace_until)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    async fn list_to_mark_grace(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<Subscription>, String> {
+        let rows: Vec<SubTuple> = sqlx::query_as(&format!(
+            "SELECT {SUB_COLUMNS} FROM subscriptions \
+             WHERE status = 'active' AND expires_at <= $1"
+        ))
+        .bind(now)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(rows.into_iter().map(sub_row).collect())
+    }
+
+    async fn list_to_mark_lapsed(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<Subscription>, String> {
+        let rows: Vec<SubTuple> = sqlx::query_as(&format!(
+            "SELECT {SUB_COLUMNS} FROM subscriptions \
+             WHERE status = 'grace' AND grace_until <= $1"
+        ))
+        .bind(now)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(rows.into_iter().map(sub_row).collect())
+    }
+
+    async fn list_to_delete(
+        &self,
+        before: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<Subscription>, String> {
+        let rows: Vec<SubTuple> = sqlx::query_as(&format!(
+            "SELECT {SUB_COLUMNS} FROM subscriptions \
+             WHERE status = 'lapsed' AND grace_until <= $1"
+        ))
+        .bind(before)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(rows.into_iter().map(sub_row).collect())
+    }
+
+    async fn set_status(
+        &self,
+        id: uuid::Uuid,
+        status: SubscriptionStatus,
+        grace_until: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<(), String> {
+        sqlx::query("UPDATE subscriptions SET status = $2, grace_until = $3 WHERE id = $1")
+            .bind(id)
+            .bind(status.as_str())
+            .bind(grace_until)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+}
+
+pub struct PgPaymentOrderRepo {
+    pub pool: PgPool,
+}
+
+type OrderTuple = (
+    uuid::Uuid,
+    uuid::Uuid,
+    Decimal,
+    String,
+    String,
+    String,
+    Option<String>,
+    chrono::DateTime<chrono::Utc>,
+    Option<chrono::DateTime<chrono::Utc>>,
+);
+
+fn order_row(row: OrderTuple) -> PaymentOrder {
+    let (id, user_id, amount, mint, recipient, status, signature, created_at, paid_at) = row;
+    PaymentOrder {
+        id,
+        user_id,
+        amount,
+        mint,
+        recipient,
+        status: PaymentOrderStatus::parse(&status).unwrap_or(PaymentOrderStatus::Pending),
+        signature,
+        created_at,
+        paid_at,
+    }
+}
+
+const ORDER_COLUMNS: &str =
+    "id, user_id, amount, mint, recipient, status, signature, created_at, paid_at";
+
+#[async_trait]
+impl PaymentOrderRepo for PgPaymentOrderRepo {
+    async fn insert(&self, order: &PaymentOrder) -> Result<(), String> {
+        sqlx::query(
+            "INSERT INTO payment_orders \
+             (id, user_id, amount, mint, recipient, status, signature, created_at, paid_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+        )
+        .bind(order.id)
+        .bind(order.user_id)
+        .bind(order.amount)
+        .bind(&order.mint)
+        .bind(&order.recipient)
+        .bind(order.status.as_str())
+        .bind(&order.signature)
+        .bind(order.created_at)
+        .bind(order.paid_at)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    async fn find_by_id(&self, id: uuid::Uuid) -> Result<Option<PaymentOrder>, String> {
+        let row: Option<OrderTuple> = sqlx::query_as(&format!(
+            "SELECT {ORDER_COLUMNS} FROM payment_orders WHERE id = $1"
+        ))
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(row.map(order_row))
+    }
+
+    async fn find_by_signature(&self, signature: &str) -> Result<Option<PaymentOrder>, String> {
+        let row: Option<OrderTuple> = sqlx::query_as(&format!(
+            "SELECT {ORDER_COLUMNS} FROM payment_orders WHERE signature = $1"
+        ))
+        .bind(signature)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(row.map(order_row))
+    }
+
+    async fn mark_paid_if_pending(
+        &self,
+        id: uuid::Uuid,
+        signature: &str,
+        paid_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<bool, String> {
+        let res = sqlx::query(
+            "UPDATE payment_orders SET status = 'paid', signature = $2, paid_at = $3 \
+             WHERE id = $1 AND status = 'pending'",
+        )
+        .bind(id)
+        .bind(signature)
+        .bind(paid_at)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(res.rows_affected() == 1)
+    }
+}
+
+pub struct PgStorageRepo {
+    pub pool: PgPool,
+}
+
+const STORAGE_TOTAL_SQL: &str =
+    "SELECT COALESCE(SUM(bytes), 0)::bigint FROM storage_files WHERE shop_id = $1";
+
+#[async_trait]
+impl StorageUsageRepo for PgStorageRepo {
+    async fn add_checked(
+        &self,
+        shop_id: uuid::Uuid,
+        key: uuid::Uuid,
+        bytes: i64,
+        quota: i64,
+    ) -> Result<i64, StorageError> {
+        let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
+        // Idempotent per key: re-recording the same file is a no-op.
+        sqlx::query(
+            "INSERT INTO storage_files (shop_id, key, bytes) VALUES ($1, $2, $3) \
+             ON CONFLICT (shop_id, key) DO NOTHING",
+        )
+        .bind(shop_id)
+        .bind(key)
+        .bind(bytes)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+        let total: (i64,) = sqlx::query_as(STORAGE_TOTAL_SQL)
+            .bind(shop_id)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+        if total.0 > quota {
+            return Err(StorageError::QuotaExceeded);
+        }
+        tx.commit().await.map_err(|e| e.to_string())?;
+        Ok(total.0)
+    }
+
+    async fn total(&self, shop_id: uuid::Uuid) -> Result<i64, StorageError> {
+        let total: (i64,) = sqlx::query_as(STORAGE_TOTAL_SQL)
+            .bind(shop_id)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(total.0)
     }
 }

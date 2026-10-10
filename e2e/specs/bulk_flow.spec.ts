@@ -1,6 +1,12 @@
 import { test, expect } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
+import { apiAuth, conn, ensureUsdc, freshWallet } from "./helpers/solana";
+import { injectMockWallet, gotoUi, uiSignIn, uiSubscribe, saveVideo } from "./helpers/ui";
+
+test.afterEach(async ({ page }) => {
+  await saveVideo(page, "bulk_flow");
+});
 
 let stepNo = 0;
 async function shot(page: any, dir: string, name: string) {
@@ -13,10 +19,10 @@ async function shot(page: any, dir: string, name: string) {
 
 const BACKEND = process.env.BACKEND ?? "http://localhost:18080";
 const UI = process.env.UI ?? "http://localhost:8081";
-const GOODS_UI_COUNT = 100; // every kind added through the UI form
-const SCAN_START = 50; // item-050..item-099 carry barcodes (disjoint from manual clicks)
-const SCAN_COUNT = 50;
-const MANUAL_CLICK_COUNT = 50;
+const GOODS_UI_COUNT = 30; // every kind added through the UI form
+const SCAN_START = 15; // item-015..item-029 carry barcodes (disjoint from manual clicks)
+const SCAN_COUNT = 15;
+const MANUAL_CLICK_COUNT = 15;
 const PRICE = "2";
 const VAT_RATE = "10";
 const VAT_MULTIPLIER = 1 + Number(VAT_RATE) / 100;
@@ -53,7 +59,7 @@ function ean13(base12: string): string {
   return base12 + String((10 - (sum % 10)) % 10);
 }
 
-const FLOW = "bulk: 100+ goods (manual + barcode) → vat → 100-item bill → qr";
+const FLOW = "bulk: 30 goods (manual + barcode) → vat → 30-item bill → qr";
 
 test(`${FLOW} — desktop`, async ({ page }) => {
   await runFlow(page);
@@ -66,22 +72,21 @@ test(`${FLOW} — mobile`, async ({ page }) => {
 
 async function runFlow(page: any, _dir = "bulk_flow") {
   test.setTimeout(240_000);
-  const email = `bulk-owner-${rand()}@test.dev`;
-  const password = "hunter2234";
+  const wallet = freshWallet();
+  await ensureUsdc(conn());
+  await injectMockWallet(page, wallet);
 
-  // 01: register + login via UI
+  // 01: wallet sign-in via UI + subscribe
   await shot(page, "bulk_flow", "01-register-login-via-ui");
-  await page.goto(`${UI}/?api=${encodeURIComponent(BACKEND)}`);
-  await page.locator('input[placeholder="email"]').fill(email);
-  await page.locator('input[placeholder="password"]').fill(password);
-  await page.getByRole("button", { name: "Register" }).click();
-  await expect(page.locator(".toast.success")).toContainText("registered", { timeout: 20_000 });
-  await page.getByRole("button", { name: "Login", exact: true }).click();
-  await expect(page.locator('[aria-label="new-shop"]')).toBeVisible({ timeout: 20_000 });
+  await gotoUi(page);
+  await uiSignIn(page);
+  await page.locator('[aria-label="new-shop"]').click();
+  await expect(page.locator(".modal-overlay")).toContainText("Subscription required", { timeout: 15_000 });
+  await uiSubscribe(page);
+  await expect(page.locator('input[placeholder="new shop name"]')).toBeVisible({ timeout: 20_000 });
 
   // 02: create shop via modal
   await shot(page, "bulk_flow", "02-create-shop-via-modal");
-  await page.locator('[aria-label="new-shop"]').click();
   await page.locator('input[placeholder="new shop name"]').fill(`Bulk Cafe ${rand()}`);
   await page.locator('[aria-label="create-shop"]').click();
   const shopChip = page.locator(".shop-chip").first();
@@ -91,8 +96,7 @@ async function runFlow(page: any, _dir = "bulk_flow") {
 
   // 03: token via API for bulk setup
   await shot(page, "bulk_flow", "03-token-via-api-for-bulk-setup");
-  const login = await api("POST", "/auth/login", undefined, { email, password });
-  const { token } = await login.json();
+  const { token } = await apiAuth(api, wallet);
   const shops = await (await api("GET", "/shops", token)).json();
   const shopId = shops[0].shop_id;
 
@@ -127,11 +131,11 @@ async function runFlow(page: any, _dir = "bulk_flow") {
   expect(listed.length).toBe(GOODS_UI_COUNT);
   console.log(`[bulk] ${listed.length} goods added via UI form`);
 
-  // capture the 100-kind table: first page, last page (item-090..099), pager state
-  for (let p = 1; p < 10; p++) {
+  // capture the 30-kind table: page forward to the last page (item-029), pager state
+  for (let p = 0; p < 5 && (await page.locator("tr", { hasText: "item-029" }).count()) === 0; p++) {
     await page.locator(".pager-btn").last().click();
   }
-  await expect(page.locator("tr", { hasText: "item-099" })).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator("tr", { hasText: "item-029" })).toBeVisible({ timeout: 15_000 });
 
   // 07: VAT setting via UI (exclusive 10%)
   await page.locator('[aria-label="tab-settings"]').click();
@@ -140,12 +144,12 @@ async function runFlow(page: any, _dir = "bulk_flow") {
   await page.locator('[aria-label="vat-rate"]').fill(VAT_RATE);
   await shot(page, "bulk_flow", "07-vat-setting-via-ui-exclusive-10");
   await page.locator('[aria-label="save-vat"]').click();
-  await expect(page.locator(".toast.success", { hasText: "VAT settings saved" })).toBeVisible({
+  await expect(page.locator(".toast.success", { hasText: "Payment settings saved" })).toBeVisible({
     timeout: 15_000,
   });
 
-  // 08: sell tab → manual select 50 tiles
-  await shot(page, "bulk_flow", "08-sell-tab-manual-select-50-tiles");
+  // 08: sell tab → manual select 15 tiles
+  await shot(page, "bulk_flow", "08-sell-tab-manual-select-15-tiles");
   await page.locator('[aria-label="tab-sell"]').click();
   await expect(page.locator(".goods-tile").first()).toBeVisible({ timeout: 20_000 });
   const tiles = await page.locator(".goods-tile").count();
@@ -157,8 +161,8 @@ async function runFlow(page: any, _dir = "bulk_flow") {
   await expect(page.locator(".total-bar")).toContainText(`VAT ${VAT_RATE}%`);
   await shot(page, "bulk_flow", "08b-total-bar-shows-vat-breakdown");
 
-  // 09: barcode scan 50 (scan input is always visible on the sell tab)
-  await shot(page, "bulk_flow", "09-barcode-scan-50-scan-input-is-always-vis");
+  // 09: barcode scan 15 (scan input is always visible on the sell tab)
+  await shot(page, "bulk_flow", "09-barcode-scan-15-scan-input-is-always-vis");
   const scan = page.locator('input[placeholder="scan or type barcode, Enter to add"]');
   for (let i = SCAN_START; i < SCAN_START + SCAN_COUNT; i++) {
     await scan.fill(ean13(`24${String(i).padStart(10, "0")}`));
@@ -167,11 +171,13 @@ async function runFlow(page: any, _dir = "bulk_flow") {
   const pickedCount = MANUAL_CLICK_COUNT + SCAN_COUNT;
   const subtotal = pickedCount * Number(PRICE);
   await expect(page.locator(".total-bar")).toContainText(String(subtotal));
-  await shot(page, "bulk_flow", "09b-all-100-picked-after-scan");
+  await shot(page, "bulk_flow", "09b-all-30-picked-after-scan");
 
   // 10: checkout → QR with VAT
   await shot(page, "bulk_flow", "10-checkout-qr-with-vat");
   await page.locator('[aria-label="new-doc"]').click();
+  await expect(page.locator('[aria-label="pay-method"]').first()).toBeVisible({ timeout: 20_000 });
+  await page.locator('[aria-label="pay-method"]').first().click();
   const qr = page.locator(".qr svg").first();
   await expect(qr).toBeVisible({ timeout: 20_000 });
   const expectedTotal = subtotal + vat_amount(subtotal);

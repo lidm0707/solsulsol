@@ -4,7 +4,9 @@ pub mod auth;
 pub mod destination;
 pub mod goods;
 pub mod invoice;
+pub mod maintenance;
 pub mod shop;
+pub mod subscription;
 pub mod use_cases;
 
 #[cfg(not(target_arch = "wasm32"))]

@@ -7,7 +7,9 @@ const PROVIDER_PHANTOM: &str = "solana";
 const PROVIDER_SOLFLARE: &str = "solflare";
 const METHOD_CONNECT: &str = "connect";
 const METHOD_SIGN_SEND: &str = "signAndSendTransaction";
+const METHOD_SIGN_MESSAGE: &str = "signMessage";
 const FIELD_ADDRESS: &str = "toString";
+const FIELD_SIGNATURE: &str = "signature";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WalletKind {
@@ -86,6 +88,13 @@ impl Wallet {
         Ok(())
     }
 
+    /// Sign an arbitrary message (wallet sign-in) and return the base58 signature.
+    pub async fn sign_message(&self, message: &str) -> Result<String, WalletError> {
+        let bytes = js_sys::Uint8Array::from(message.as_bytes());
+        let ret = call_async(&self.provider, METHOD_SIGN_MESSAGE, &[bytes.into()]).await?;
+        signature_of(&ret).ok_or(WalletError::Rejected)
+    }
+
     /// Sign and broadcast a base64-encoded serialized `Transaction`/`VersionedTransaction`
     /// (built off-chain, e.g. by the backend) and return the signature.
     pub async fn sign_and_send(&self, tx_base64: &str) -> Result<String, WalletError> {
@@ -148,8 +157,34 @@ fn signature_of(value: &JsValue) -> Option<String> {
         return Some(s);
     }
     let obj = value.dyn_ref::<js_sys::Object>()?;
-    let sig = js_sys::Reflect::get(obj, &JsValue::from_str("signature")).ok()?;
-    sig.as_string()
+    let sig = js_sys::Reflect::get(obj, &JsValue::from_str(FIELD_SIGNATURE)).ok()?;
+    if let Some(s) = sig.as_string() {
+        return Some(s);
+    }
+    let bytes = sig.dyn_ref::<js_sys::Uint8Array>()?;
+    Some(encode_base58(&bytes.to_vec()))
+}
+
+/// Minimal standard base58 encode (Bitcoin alphabet, leading zeros as `1`).
+fn encode_base58(input: &[u8]) -> String {
+    const ALPHABET: &[u8; 58] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+    let zeros = input.iter().take_while(|b| **b == 0).count();
+    let mut digits: Vec<u8> = Vec::with_capacity(input.len() * 138 / 100 + 1);
+    for &byte in &input[zeros..] {
+        let mut carry = u32::from(byte);
+        for d in &mut digits {
+            carry += 256 * u32::from(*d);
+            *d = (carry % 58) as u8;
+            carry /= 58;
+        }
+        while carry > 0 {
+            digits.push((carry % 58) as u8);
+            carry /= 58;
+        }
+    }
+    let mut out = String::from("1").repeat(zeros);
+    out.extend(digits.iter().rev().map(|d| ALPHABET[*d as usize] as char));
+    out
 }
 
 /// Minimal standard base64 decode for wasm payloads (padding-tolerant).

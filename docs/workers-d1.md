@@ -9,7 +9,7 @@ This replaces the axum + sqlx/Postgres stack; the existing crates stay reusable
 - `crates/api` (`pos-api`): DTOs, route types, error mapping — reusable as-is,
   compiles for `wasm32-unknown-unknown`.
 - `crates/backend` ports (`src/port/`): the seams. On Workers you implement
-  `UserRepo`, `ShopRepo`, `ShopMemberRepo`, `ProductRepo`, `DestinationRepo`,
+  `UserRepo`, `ShopRepo`, `ShopMemberRepo`, `GoodsRepo`, `DestinationRepo`,
   `InviteRepo`, `InvoiceRepo`, plus `encryption`/`qr` adapters over D1/JS APIs.
 - Do **not** try to port sqlx/Postgres to Workers. D1 is SQLite-flavored, so SQL
   text differs (no `UUID` type — store `TEXT`, no `now()` — use
@@ -89,7 +89,7 @@ CREATE TABLE shop_members (
   PRIMARY KEY (shop_id, user_id)
 );
 
-CREATE TABLE products (
+CREATE TABLE goods (
   id TEXT PRIMARY KEY,
   shop_id TEXT NOT NULL REFERENCES shops(id),
   name TEXT NOT NULL,

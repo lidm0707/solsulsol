@@ -1,42 +1,11 @@
-//! Round-trip tests: argon2 hash/verify + jwt issue/verify + expiry.
+//! JWT session token round-trips (wallet auth replaced argon2 passwords).
 
 use uuid::Uuid;
 
-use pos_backend::infra::encryption_adapter::hash::Argon2Hasher;
 use pos_backend::infra::encryption_adapter::jwt::{Claims, JwtIssuer};
-use pos_backend::port::{PasswordHasher, TokenIssuer};
+use pos_backend::port::encryption::TokenIssuer;
 
 const SECRET: &str = "test-secret";
-const PASSWORD: &str = "correct horse battery staple";
-const WRONG_PASSWORD: &str = "wrong password entirely";
-
-#[tokio::test]
-async fn argon2_hash_verifies_and_rejects_wrong_password() {
-    let hasher = Argon2Hasher::new();
-    let hash = hasher.hash(PASSWORD).await.expect("valid password hashes");
-    assert_ne!(hash, PASSWORD);
-    assert!(hasher.verify(PASSWORD, &hash).await.expect("verify ok"));
-    assert!(
-        !hasher
-            .verify(WRONG_PASSWORD, &hash)
-            .await
-            .expect("verify ok")
-    );
-}
-
-#[tokio::test]
-async fn argon2_salts_produce_distinct_hashes() {
-    let hasher = Argon2Hasher::new();
-    let a = hasher.hash(PASSWORD).await.expect("hash ok");
-    let b = hasher.hash(PASSWORD).await.expect("hash ok");
-    assert_ne!(a, b);
-}
-
-#[tokio::test]
-async fn argon2_rejects_short_password() {
-    let hasher = Argon2Hasher::new();
-    assert!(hasher.hash("abc").await.is_err());
-}
 
 #[tokio::test]
 async fn jwt_round_trips_user_id() {

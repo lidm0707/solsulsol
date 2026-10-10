@@ -70,6 +70,95 @@ pub struct LoginResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuthNonceRequest {
+    pub wallet: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuthNonceResponse {
+    pub nonce: String,
+    pub message: String,
+    pub expires_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuthVerifyRequest {
+    pub wallet: String,
+    pub nonce: String,
+    pub signature: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuthResponse {
+    pub token: String,
+    pub user_id: Uuid,
+    pub wallet: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MeResponse {
+    pub user_id: Uuid,
+    pub wallet: Option<String>,
+    pub email: Option<String>,
+    pub role: Role,
+    #[serde(default)]
+    pub subscription: Option<SubscriptionResponse>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SubscriptionStatusApi {
+    Active,
+    Grace,
+    Lapsed,
+    Deleted,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubscriptionResponse {
+    pub status: SubscriptionStatusApi,
+    pub started_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub grace_until: Option<chrono::DateTime<chrono::Utc>>,
+    pub price_usdc: rust_decimal::Decimal,
+    pub shops_used: usize,
+    pub shops_quota: usize,
+    pub goods_used: usize,
+    pub goods_quota: usize,
+    pub storage_bytes: i64,
+    pub storage_quota_bytes: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreatePaymentOrderRequest {
+    #[serde(default)]
+    pub renew: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PaymentOrderStatusApi {
+    Pending,
+    Paid,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PaymentOrderResponse {
+    pub order_id: Uuid,
+    pub amount_usdc: rust_decimal::Decimal,
+    pub mint: String,
+    pub recipient: String,
+    pub status: PaymentOrderStatusApi,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VerifyPaymentRequest {
+    pub order_id: Uuid,
+    pub signature: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateShopRequest {
     pub name: String,
 }
@@ -82,6 +171,10 @@ pub struct ShopResponse {
     pub vat_mode: VatMode,
     #[serde(default)]
     pub vat_rate: rust_decimal::Decimal,
+    #[serde(default)]
+    pub fx_thb_per_sol: rust_decimal::Decimal,
+    #[serde(default)]
+    pub currency: Currency,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -112,9 +205,7 @@ pub struct InviteResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct InviteAcceptRequest {
-    pub password: String,
-}
+pub struct InviteAcceptRequest {}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AddGoodsRequest {
@@ -127,6 +218,12 @@ pub struct AddGoodsRequest {
     pub units: i64,
     #[serde(default)]
     pub barcode: Option<String>,
+    #[serde(default)]
+    pub icon: String,
+    #[serde(default)]
+    pub color: String,
+    #[serde(default)]
+    pub goods_type: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -141,6 +238,18 @@ pub struct GoodsResponse {
     pub units: i64,
     #[serde(default)]
     pub barcode: Option<String>,
+    #[serde(default)]
+    pub icon: String,
+    #[serde(default)]
+    pub color: String,
+    #[serde(default)]
+    pub goods_type: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GoodsSalesResponse {
+    pub goods_id: Uuid,
+    pub sold: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -179,11 +288,16 @@ pub struct InvoiceLineResponse {
     pub cost: rust_decimal::Decimal,
 }
 
+pub const DECIMAL_ZERO: rust_decimal::Decimal = rust_decimal::Decimal::ZERO;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InvoiceResponse {
     pub invoice_id: Uuid,
     pub shop_id: Uuid,
     pub total: rust_decimal::Decimal,
+    /// Amount encoded in the QR payload (THB for PromptPay, else `total`).
+    #[serde(default)]
+    pub qr_amount: rust_decimal::Decimal,
     #[serde(default)]
     pub subtotal: rust_decimal::Decimal,
     #[serde(default)]
@@ -216,8 +330,20 @@ pub enum VatMode {
     Inclusive,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum Currency {
+    #[default]
+    Thb,
+    Usdt,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateShopSettingsRequest {
     pub vat_mode: VatMode,
     pub vat_rate: rust_decimal::Decimal,
+    #[serde(default)]
+    pub fx_thb_per_sol: rust_decimal::Decimal,
+    #[serde(default)]
+    pub currency: Currency,
 }

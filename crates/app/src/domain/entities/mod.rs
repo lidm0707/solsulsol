@@ -1,18 +1,35 @@
 //! Entities: identity + lifecycle, equality by id.
 
-use crate::domain::value_objects::{ChainAddress, Email, Money, PasswordHash, Role, SplToken};
+pub mod subscription;
+
+use crate::domain::value_objects::{
+    ChainAddress, Email, Money, PastelColor, Role, SplToken, Wallet,
+};
 use chrono::DateTime;
 use chrono::Utc;
 use rust_decimal::Decimal;
 use uuid::Uuid;
 
+/// A wallet-first account; `email` is optional (set via accepted invites).
 #[derive(Debug, Clone)]
 pub struct User {
     pub id: Uuid,
-    pub email: Email,
-    pub password: PasswordHash,
+    pub email: Option<Email>,
+    pub wallet: Option<Wallet>,
     pub role: Role,
     pub created_at: DateTime<Utc>,
+}
+
+impl User {
+    /// Display identity: email when linked, else the wallet address.
+    #[must_use]
+    pub fn label(&self) -> &str {
+        match (&self.email, &self.wallet) {
+            (Some(e), _) => e.as_str(),
+            (None, Some(w)) => w.as_str(),
+            (None, None) => "",
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -22,6 +39,12 @@ pub struct Shop {
     pub name: String,
     pub vat_mode: VatMode,
     pub vat_rate: Decimal,
+    /// THB per ◎ used for PromptPay QR amounts; 0 disables conversion.
+    pub fx_thb_per_sol: Decimal,
+    /// Display/settlement currency of checkout totals.
+    pub currency: Currency,
+    /// Set during the post-grace recovery window; hard-deleted later.
+    pub deleted_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone)]
@@ -32,7 +55,7 @@ pub struct ShopMember {
 }
 
 #[derive(Debug, Clone)]
-pub struct Product {
+pub struct Goods {
     pub id: Uuid,
     pub shop_id: Uuid,
     pub name: String,
@@ -40,6 +63,9 @@ pub struct Product {
     pub cost: rust_decimal::Decimal,
     pub units: i64,
     pub barcode: Option<String>,
+    pub icon: crate::domain::value_objects::GoodsIcon,
+    pub color: PastelColor,
+    pub goods_type: crate::domain::value_objects::GoodsType,
 }
 
 #[derive(Debug, Clone)]
@@ -155,9 +181,36 @@ impl VatMode {
     }
 }
 
+/// Currencies a shop may price its totals in.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Currency {
+    #[default]
+    Thb,
+    Usdt,
+}
+
+impl Currency {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Thb => "thb",
+            Self::Usdt => "usdt",
+        }
+    }
+
+    #[must_use]
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw {
+            "thb" => Some(Self::Thb),
+            "usdt" => Some(Self::Usdt),
+            _ => None,
+        }
+    }
+}
+
 pub const VAT_RATE_MAX: Decimal = Decimal::from_parts(100, 0, 0, false, 0);
 
-fn round2(v: Decimal) -> Decimal {
+pub(crate) fn round2(v: Decimal) -> Decimal {
     v.round_dp(2)
 }
 
@@ -205,7 +258,7 @@ impl Invoice {
 
 #[derive(Debug, Clone)]
 pub struct InvoiceLine {
-    pub product_id: Uuid,
+    pub goods_id: Uuid,
     pub name: String,
     pub price: Money,
     pub cost: Decimal,

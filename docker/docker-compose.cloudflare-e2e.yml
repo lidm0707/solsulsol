@@ -1,6 +1,14 @@
 name: solsulsol-cloudflare-e2e
 
 services:
+  surfpool:
+    image: surfpool/surfpool:latest
+    # offline local surfnet: no mainnet fork dependency in CI
+    command: ["start", "--offline", "--host", "0.0.0.0"]
+    ports:
+      - "127.0.0.1:8899:8899"
+      - "127.0.0.1:8900:8900"
+
   worker-e2e:
     build:
       context: ..
@@ -11,6 +19,7 @@ services:
       - ../crates:/app/crates
       - ../Cargo.toml:/app/Cargo.toml:ro
       - ../Cargo.lock:/app/Cargo.lock:ro
+      - ../e2e/.solana/env:/app/e2e-env:ro
       - worker-e2e-d1:/app/crates/cloudflare/.wrangler/state
       # cargo cache: survives container recreation, wasm rebuilds stay incremental
       - worker-e2e-target:/app/target
@@ -27,7 +36,17 @@ services:
       - -c
       - |
         wrangler d1 execute my_db --local --file schema.sql --persist-to .wrangler/state
-        exec wrangler dev --port 8787 --ip 0.0.0.0 --persist-to .wrangler/state
+        . /app/e2e-env
+        exec wrangler dev --port 8787 --ip 0.0.0.0 --persist-to .wrangler/state \
+          --var USDC_MINT:$$USDC_MINT \
+          --var PAYMENT_RECIPIENT:$$PAYMENT_RECIPIENT \
+          --var SOLANA_RPC_URL:$$SOLANA_RPC_URL \
+          --var POS_DOMAIN:$$POS_DOMAIN \
+          --var SOLANA_NETWORK:devnet \
+          --var SUBSCRIPTION_PRICE_USDC:1
+    depends_on:
+      surfpool:
+        condition: service_started
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8787/health || exit 1"]
       interval: 5s

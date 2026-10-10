@@ -2,6 +2,7 @@
 //! from the qr payload, approval captured, transaction confirmed on private surfpool.
 
 import { test, expect } from "@playwright/test";
+import { execSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -12,6 +13,8 @@ import {
   clusterApiUrl,
   LAMPORTS_PER_SOL,
 } from "@solana/web3.js";
+import { ensureUsdc } from "./helpers/solana";
+import { uiSubscribe } from "./helpers/ui";
 
 const BACKEND = process.env.BACKEND ?? "http://localhost:18080";
 const UI = process.env.UI ?? "http://localhost:8081";
@@ -24,7 +27,6 @@ const WEB3_BUNDLE = path.join(__dirname, "..", "node_modules", "@solana", "web3.
 const PRICE_SOL = 3.5;
 const AIRDROP_SOL = 10;
 
-const rand = () => Math.random().toString(36).slice(2, 10);
 const sleepMs = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const FLOW = "phantom pay: qr amount → phantom signs → confirmed on private surfpool";
@@ -32,6 +34,11 @@ const FLOW = "phantom pay: qr amount → phantom signs → confirmed on private 
 test(`${FLOW}`, async ({ playwright }) => {
   test.setTimeout(300_000);
   fs.mkdirSync(CAPTURES, { recursive: true });
+  // the phantom profile wallet is reused across runs, so drop any account it
+  // created previously (cascades to shops, subscriptions and orders)
+  execSync(
+    `docker exec solsulsol-e2e-postgres-test-1 psql -U pos_test -d pos_test -c 'TRUNCATE users CASCADE'`,
+  );
   const wallet = fs
     .readFileSync(path.join(PHANTOM_DIR, "test-wallet-address.txt"), "utf8")
     .trim();
@@ -68,17 +75,70 @@ test(`${FLOW}`, async ({ playwright }) => {
     if (!worker) worker = await ctx.waitForEvent("serviceworker", { timeout: 30_000 });
     const extId = new URL(worker.url()).host;
 
-    // ---- pos side: run a sale up to the pay screen -------------------------
+    // capture the app's Authorization header so the test can call the API as
+    // the phantom-wallet user (its key is locked inside the extension)
+    await ctx.addInitScript({
+      content: `
+        window.__lastAuth = null;
+        const __origFetch = window.fetch.bind(window);
+        window.fetch = (input, init) => {
+          try {
+            const h = input && input.headers ? input.headers : init && init.headers;
+            const auth = h && (h.get ? h.get('Authorization') : h['Authorization'] || h['authorization']);
+            if (auth) window.__lastAuth = auth;
+          } catch (e) {}
+          return __origFetch(input, init);
+        };
+      `,
+    });
+
+    // ---- pos side: real-phantom wallet sign-in + subscribe, then a sale ---
     const pos = await ctx.newPage();
     await pos.goto(`${UI}/?api=${encodeURIComponent(BACKEND)}`);
-    const email = `pay-${rand()}@test.dev`;
-    await pos.locator('input[placeholder="email"]').fill(email);
-    await pos.locator('input[placeholder="password"]').fill("hunter2234");
-    await pos.getByRole("button", { name: "Register" }).click();
-    await expect(pos.locator(".toast.success")).toContainText("registered");
-    await pos.getByRole("button", { name: "Login", exact: true }).click();
-    await expect(pos.locator('[aria-label="new-shop"]')).toBeVisible({ timeout: 15_000 });
+
+    // connect → phantom approval popup → Sign In → signMessage popup approve
+    const connectClick = pos.locator('[aria-label="connect-wallet"]').first().click();
+    const connectPopup = await ctx.waitForEvent("page", { timeout: 15_000 }).catch(() => null);
+    if (connectPopup) {
+      await connectPopup.waitForLoadState();
+      await connectPopup.waitForTimeout(2_000);
+      if (await connectPopup.locator('input[type="password"]').first().isVisible().catch(() => false)) {
+        await connectPopup.locator('input[type="password"]').first().fill(pass);
+        await connectPopup.getByRole("button", { name: /unlock/i }).click();
+        await connectPopup.waitForTimeout(2_000);
+      }
+      await connectPopup.screenshot({ path: path.join(CAPTURES, "0-phantom-connect-popup.png") });
+      await connectPopup.getByRole("button", { name: /connect/i }).first().click({ timeout: 20_000 });
+    } else {
+      console.log("[phantom-pay] no connect popup (already trusted)");
+    }
+    await connectClick;
+
+    await pos.getByRole("button", { name: "Sign In" }).click();
+    const signPopup = await ctx.waitForEvent("page", { timeout: 20_000 }).catch(() => null);
+    expect(signPopup, "phantom signMessage popup must open").toBeTruthy();
+    await signPopup!.waitForLoadState();
+    await signPopup!.waitForTimeout(2_000);
+    await signPopup!.screenshot({ path: path.join(CAPTURES, "0-phantom-signin-popup.png") });
+    // a fresh popup may show the lock screen first
+    const unlockBtn = signPopup!.getByRole("button", { name: /unlock/i });
+    if (await unlockBtn.isVisible().catch(() => false)) {
+      await signPopup!.locator('input[type="password"]').first().fill(pass);
+      await unlockBtn.click();
+      await signPopup!.waitForTimeout(2_000);
+    }
+    await signPopup!.getByRole("button", { name: /sign|approve|confirm/i }).first().click({ timeout: 20_000 });
+    await expect(pos.locator('[aria-label="new-shop"]')).toBeVisible({ timeout: 20_000 });
+
+    // $1/mo subscription — paid from the surfpool test payer (the extension
+    // wallet's secret is locked and it holds no USDC); no tabbar exists yet,
+    // so drive the dashboard Subscription card directly
+    await ensureUsdc(conn);
     await pos.locator('[aria-label="new-shop"]').click();
+    await expect(pos.locator(".modal-overlay")).toContainText("Subscription required", { timeout: 15_000 });
+    await uiSubscribe(pos);
+
+    await expect(pos.locator('input[placeholder="new shop name"]')).toBeVisible({ timeout: 20_000 });
     await pos.locator('input[placeholder="new shop name"]').fill("Pay Cafe");
     await pos.locator('[aria-label="create-shop"]').click();
     const chip = pos.locator(".shop-chip", { hasText: "Pay Cafe" });
@@ -106,21 +166,28 @@ test(`${FLOW}`, async ({ playwright }) => {
     await expect(tile).toBeVisible({ timeout: 15_000 });
     await tile.click();
     await pos.locator('[aria-label="new-doc"]').click();
+    await expect(pos.locator('[aria-label="pay-method"]').first()).toBeVisible({ timeout: 15_000 });
+    await pos.locator('[aria-label="pay-method"]').first().click();
     await expect(pos.locator(".qr svg").first()).toBeVisible({ timeout: 15_000 });
     await pos.screenshot({ path: path.join(CAPTURES, "1-pay-screen.png") });
 
-    // qr payload from the api — amount + destination the wallet must honor
-    const login = await (await fetch(`${BACKEND}/auth/login`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password: "hunter2234" }),
-    })).json();
-    const shops = await (await fetch(`${BACKEND}/shops`, {
-      headers: { Authorization: `Bearer ${login.token}` },
-    })).json();
-    const billings = await (await fetch(`${BACKEND}/shops/${shops[0].shop_id}/billings`, {
-      headers: { Authorization: `Bearer ${login.token}` },
-    })).json();
+    // qr payload from the api — amount + destination the wallet must honor;
+    // the phantom user's token is captured from the app's own fetch calls
+    const authFetch = (method: string, p: string, token?: string, body?: unknown) =>
+      fetch(`${BACKEND}${p}`, {
+        method,
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: token } : {}),
+        },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+    const token = await pos.evaluate(() => (window as any).__lastAuth as string);
+    expect(token, "app must have called the api with an Authorization header").toBeTruthy();
+    const shops = (await (await authFetch("GET", "/shops", token)).json()) as Array<{
+      shop_id: string;
+    }>;
+    const billings = await (await authFetch("GET", `/shops/${shops[0].shop_id}/billings`, token)).json();
     const uri: string = billings[0].qr_payload;
     console.log(`[phantom-pay] qr payload: ${uri}`);
     const m = /^solana:([1-9A-HJ-NP-Za-km-z]{32,48})\?amount=([\d.]+)/.exec(uri);

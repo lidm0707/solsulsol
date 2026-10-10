@@ -1,0 +1,10 @@
+/Users/macmoo/hackatron/solana-pos/music_demo/target/release/deps/symphonia_utils_xiph-89a189b46a96d760.d: /Users/macmoo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/symphonia-utils-xiph-0.5.5/src/lib.rs /Users/macmoo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/symphonia-utils-xiph-0.5.5/src/flac/mod.rs /Users/macmoo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/symphonia-utils-xiph-0.5.5/src/flac/metadata.rs /Users/macmoo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/symphonia-utils-xiph-0.5.5/src/vorbis/mod.rs
+
+/Users/macmoo/hackatron/solana-pos/music_demo/target/release/deps/libsymphonia_utils_xiph-89a189b46a96d760.rlib: /Users/macmoo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/symphonia-utils-xiph-0.5.5/src/lib.rs /Users/macmoo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/symphonia-utils-xiph-0.5.5/src/flac/mod.rs /Users/macmoo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/symphonia-utils-xiph-0.5.5/src/flac/metadata.rs /Users/macmoo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/symphonia-utils-xiph-0.5.5/src/vorbis/mod.rs
+
+/Users/macmoo/hackatron/solana-pos/music_demo/target/release/deps/libsymphonia_utils_xiph-89a189b46a96d760.rmeta: /Users/macmoo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/symphonia-utils-xiph-0.5.5/src/lib.rs /Users/macmoo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/symphonia-utils-xiph-0.5.5/src/flac/mod.rs /Users/macmoo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/symphonia-utils-xiph-0.5.5/src/flac/metadata.rs /Users/macmoo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/symphonia-utils-xiph-0.5.5/src/vorbis/mod.rs
+
+/Users/macmoo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/symphonia-utils-xiph-0.5.5/src/lib.rs:
+/Users/macmoo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/symphonia-utils-xiph-0.5.5/src/flac/mod.rs:
+/Users/macmoo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/symphonia-utils-xiph-0.5.5/src/flac/metadata.rs:
+/Users/macmoo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/symphonia-utils-xiph-0.5.5/src/vorbis/mod.rs:

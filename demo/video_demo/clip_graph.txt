@@ -1,0 +1,9 @@
+[0:v]scale=1280:720,format=yuv420p,setsar=1,fps=30[s0];
+[1:v]scale=1280:720,format=yuv420p,setsar=1,fps=30[s1];
+[2:v]scale=1280:720,format=yuv420p,setsar=1,fps=30[s2];
+[3:v]scale=1280:720,format=yuv420p,setsar=1,fps=30[s3];
+[4:v]scale=1280:720,format=yuv420p,setsar=1,fps=30[s4];
+[5:v]scale=1280:720,format=yuv420p,setsar=1,fps=30[s5];
+[6:v]scale=1280:720,format=yuv420p,setsar=1,fps=30[s6];
+[7:v]scale=1280:720,format=yuv420p,setsar=1,fps=30[s7];
+[s0][s1][s2][s3][s4][s5][s6][s7]concat=n=8:v=1,trim=duration=25,setpts=PTS-STARTPTS,tpad=stop_mode=clone:stop_duration=1,trim=duration=25,setpts=PTS-STARTPTS,format=yuv420p[out]

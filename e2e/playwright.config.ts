@@ -7,7 +7,7 @@ const CLOUDFLARE = process.env.RUN_CLOUDFLARE === "1";
 
 export default defineConfig({
   testDir: "./specs",
-  testIgnore: CLOUDFLARE ? [] : [/cloudflare_flow/],
+  testIgnore: CLOUDFLARE ? [] : [/cloudflare_flow/, /cloudflare_ui_flow/],
   timeout: 30_000,
   retries: 1,
   // the phantom extension specs share one browser profile (SingletonLock) and
@@ -15,5 +15,7 @@ export default defineConfig({
   workers: 1,
   use: {
     baseURL: UI,
+    // record a video of every spec; kept in e2e/test-results with the report
+    video: { mode: "on", size: { width: 1280, height: 720 } },
   },
 });

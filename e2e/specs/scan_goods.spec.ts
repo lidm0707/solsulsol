@@ -1,6 +1,12 @@
 import { test, expect } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
+import { conn, ensureUsdc, freshWallet } from "./helpers/solana";
+import { injectMockWallet, gotoUi, uiSignIn, uiSubscribe, saveVideo } from "./helpers/ui";
+
+test.afterEach(async ({ page }) => {
+  await saveVideo(page, "scan_goods");
+});
 
 let stepNo = 0;
 async function shot(page: any, dir: string, name: string) {
@@ -10,31 +16,26 @@ async function shot(page: any, dir: string, name: string) {
   await page.screenshot({ path: path.join(out, stepNo + "-" + name + ".png"), fullPage: true });
 }
 
-const UI = process.env.UI ?? "http://localhost:8081";
-
-const rand = () => Math.random().toString(36).slice(2, 10);
-
 const EAN13 = "4006381333931";
 const UNKNOWN_CODE = "73513537";
 
 const FLOW = "ui: scan goods by barcode on sell tab";
 
 test(`${FLOW}`, async ({ page }) => {
-  test.setTimeout(60_000);
-  const email = `ui-scan-${rand()}@test.dev`;
-  const password = "hunter2234";
+  test.setTimeout(90_000);
+  const wallet = freshWallet();
+  await ensureUsdc(conn());
+  await injectMockWallet(page, wallet);
 
-  // 01: register + login
-  await page.goto(`${UI}/?api=${process.env.BACKEND ?? "http://localhost:18080"}`);
-  await page.locator('input[placeholder="email"]').fill(email);
-  await page.locator('input[placeholder="password"]').fill(password);
-  await page.getByRole("button", { name: "Register" }).click();
-  await expect(page.locator(".toast.success")).toContainText("registered");
-  await page.getByRole("button", { name: "Login", exact: true }).click();
-  await expect(page.locator('[aria-label="new-shop"]')).toBeVisible({ timeout: 15_000 });
+  // 01: wallet sign-in + subscribe
+  await gotoUi(page);
+  await uiSignIn(page);
+  await page.locator('[aria-label="new-shop"]').click();
+  await expect(page.locator(".modal-overlay")).toContainText("Subscription required", { timeout: 15_000 });
+  await uiSubscribe(page);
+  await expect(page.locator('input[placeholder="new shop name"]')).toBeVisible({ timeout: 20_000 });
 
   // 02: create shop
-  await page.locator('[aria-label="new-shop"]').click();
   await page.locator('input[placeholder="new shop name"]').fill("Scan Cafe");
   await page.locator('[aria-label="create-shop"]').click();
   await expect(page.locator(".shop-chip", { hasText: "Scan Cafe" })).toBeVisible({ timeout: 15_000 });

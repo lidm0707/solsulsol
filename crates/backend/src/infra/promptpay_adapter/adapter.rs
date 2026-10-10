@@ -1,7 +1,7 @@
 //! PromptPay adapter: implements pos-backend PromptPayEncoder with pos-promptpay.
 
+use crate::port::promptpay::PromptPayEncoder;
 use rust_decimal::Decimal;
-use crate::port::PromptPayEncoder;
 
 pub struct PromptPayAdapter;
 

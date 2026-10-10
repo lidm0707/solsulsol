@@ -16,7 +16,19 @@ dioxus.workspace = true
 dioxus-web = "0.7"
 reslt_core = "0.1.0"
 qrcode = { workspace = true }
-web-sys = { version = "0.3", features = ["console"] }
+web-sys = { version = "0.3", features = [
+    "console",
+    "Clipboard",
+    "Navigator",
+    "MediaDevices",
+    "MediaStream",
+    "MediaStreamConstraints",
+    "MediaStreamTrack",
+    "HtmlVideoElement",
+    "Storage",
+] }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
 gloo-net.workspace = true
 gloo-timers = { version = "0.3", features = ["futures"] }
 js-sys = "0.3"
@@ -24,5 +36,6 @@ serde.workspace = true
 serde_json.workspace = true
 async-trait.workspace = true
 uuid.workspace = true
+chrono.workspace = true
 rust_decimal.workspace = true
 console_error_panic_hook = "0.1"

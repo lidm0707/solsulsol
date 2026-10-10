@@ -2,53 +2,14 @@
 
 use async_trait::async_trait;
 use pos_app::domain::value_objects::Role;
-use pos_app::port::{PasswordHasher, PromptPayEncoder, QrRenderer, TokenIssuer};
+use pos_app::port::encryption::TokenIssuer;
+use pos_app::port::promptpay::PromptPayEncoder;
+use pos_app::port::qr::QrRenderer;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 pub const TOKEN_TTL_HOURS: i64 = 24;
-
-// --- password hashing ---
-
-pub struct Argon2Hasher;
-
-impl Argon2Hasher {
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-impl Default for Argon2Hasher {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[async_trait]
-impl PasswordHasher for Argon2Hasher {
-    async fn hash(&self, plain: &str) -> Result<String, String> {
-        use argon2::password_hash::rand_core::OsRng;
-        use argon2::password_hash::{PasswordHasher as _, SaltString};
-        use argon2::Argon2;
-
-        let salt = SaltString::generate(&mut OsRng);
-        Argon2::default()
-            .hash_password(plain.as_bytes(), &salt)
-            .map(|h| h.to_string())
-            .map_err(|e| e.to_string())
-    }
-
-    async fn verify(&self, plain: &str, hash: &str) -> Result<bool, String> {
-        use argon2::password_hash::{PasswordHash as PwHash, PasswordVerifier as _};
-        use argon2::Argon2;
-
-        let parsed = PwHash::new(hash).map_err(|e| e.to_string())?;
-        Ok(Argon2::default()
-            .verify_password(plain.as_bytes(), &parsed)
-            .is_ok())
-    }
-}
 
 // --- JWT session tokens ---
 

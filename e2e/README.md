@@ -12,6 +12,17 @@ Note: current Phantom versions no longer show the seed phrase during onboarding 
 ## Run
 
 ```sh
+make e2e                # hermetic: down -v, fresh stack + UI container, all non-cloudflare specs
+make e2e-cloudflare     # hermetic: worker stack + UI container, cloudflare specs (runs ui-build first)
+```
+
+Both targets wipe state first (compose `down -v`) because subscriptions and
+shop limits persist in the database. The stacks share surfpool port 8899 —
+run them sequentially, never in parallel.
+
+Manual setup (what the targets do):
+
+```sh
 cargo install trunk && rustup target add wasm32-unknown-unknown   # one-time
 make ui-build                          # wasm bundle -> crates/ui/ui_wasm/dist
 docker compose -f docker/docker-compose.e2e.yml up -d --build
@@ -35,3 +46,13 @@ Snapshots: `snapshots/cloudflare_flow/`, captures: `captures/cloudflare_flow/`
 UI spec drives `http://localhost:8081/?api=<backend>` — the `?api=` param sets the backend URL (default `http://localhost:8080`).
 
 `BACKEND` / `UI` / `POS_BACKEND_URL` / `POS_UI_URL` env vars override defaults. `UPDATE_SNAPSHOTS=1` regenerates API-step JSON snapshots.
+
+### Wallet-auth specs
+
+- All specs sign in through `/auth/nonce` → `/auth/verify` (ed25519 over the
+  server message, base58). UI specs inject a mock Phantom; phantom_* specs
+  drive the real extension in headless Chrome.
+- Subscription: `POST /payments/orders` → on-chain USDC transfer on the
+  private surfpool (`helpers/solana.ts`) → `POST /payments/verify`.
+- `freshWallet()` (helpers/solana.ts) gives each run a throwaway identity;
+  payments are still made by the shared `payer` keypair.

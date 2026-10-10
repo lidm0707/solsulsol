@@ -39,6 +39,28 @@ impl UseWallet {
         self.error.set(None);
     }
 
+    /// Sign an arbitrary message with the connected wallet; returns the base58 signature.
+    pub async fn sign_message(&mut self, message: &str) -> Option<String> {
+        let Some(account) = self.account.read().clone() else {
+            self.error.set(Some(String::from("wallet not connected")));
+            return None;
+        };
+        let Some(wallet) = account.kind.detect() else {
+            self.error.set(Some(String::from("wallet unavailable")));
+            return None;
+        };
+        self.busy.set(true);
+        let res = wallet.sign_message(message).await;
+        self.busy.set(false);
+        match res {
+            Ok(sig) => Some(sig),
+            Err(e) => {
+                self.error.set(Some(e.to_string()));
+                None
+            }
+        }
+    }
+
     /// Sign + broadcast a base64 tx with the connected wallet; returns the signature.
     pub async fn sign_and_send(&mut self, tx_base64: &str) -> Option<String> {
         let Some(account) = self.account.read().clone() else {

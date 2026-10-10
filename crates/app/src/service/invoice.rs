@@ -1,10 +1,11 @@
 //! Invoice use-case: select goods, attach payment destination, render QR, store invoice.
 
-use crate::domain::entities::{Invoice, InvoiceLine, Order, PaymentDestination, Shop};
+use crate::domain::entities::{Invoice, InvoiceLine, Order, PaymentDestination, Shop, round2};
 use crate::domain::value_objects::{Chain, new_id};
 use rust_decimal::Decimal;
 
-use crate::port::{PromptPayEncoder, QrRenderer};
+use crate::port::promptpay::PromptPayEncoder;
+use crate::port::qr::QrRenderer;
 use crate::service::use_cases::AppServices;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -12,7 +13,7 @@ const POS_SOLANA_CLUSTER_ENV: &str = "POS_SOLANA_CLUSTER";
 
 #[derive(Debug)]
 pub enum InvoiceError {
-    NoProducts,
+    NoGoods,
     Storage(String),
 }
 
@@ -27,21 +28,21 @@ pub async fn checkout(
     qr: &dyn QrRenderer,
     pp: &dyn PromptPayEncoder,
     shop: &Shop,
-    product_ids: &[uuid::Uuid],
+    goods_ids: &[uuid::Uuid],
     destination: PaymentDestination,
 ) -> Result<(Invoice, Vec<u8>), InvoiceError> {
     let shop_id = shop.id;
-    let all = svc.products.find_by_shop(shop_id).await?;
+    let all = svc.goods.find_by_shop(shop_id).await?;
     let mut lines = Vec::new();
-    for id in product_ids {
+    for id in goods_ids {
         let Some(p) = all.iter().find(|p| p.id == *id) else {
-            return Err(InvoiceError::Storage("product not in shop".into()));
+            return Err(InvoiceError::Storage("goods not in shop".into()));
         };
         if p.units > 0 {
-            svc.products.take_units(p.id).await?;
+            svc.goods.take_units(p.id).await?;
         }
         lines.push(InvoiceLine {
-            product_id: p.id,
+            goods_id: p.id,
             name: p.name.clone(),
             price: p.price,
             cost: p.cost,
@@ -49,7 +50,7 @@ pub async fn checkout(
         });
     }
     if lines.is_empty() {
-        return Err(InvoiceError::NoProducts);
+        return Err(InvoiceError::NoGoods);
     }
     let order = Order {
         id: new_id(),
@@ -68,7 +69,20 @@ pub async fn checkout(
     Ok((invoice, qr_png))
 }
 
-pub fn pay_payload(pp: &dyn PromptPayEncoder, dest: &PaymentDestination, total: Decimal) -> String {
+/// Amount encoded in the QR payload: the SOL total, converted to THB for
+/// PromptPay (BOT standard mandates THB) when a rate is configured.
+pub fn qr_amount(total: Decimal, chain: Chain, fx_thb_per_sol: Decimal) -> Decimal {
+    match chain {
+        Chain::Bank if fx_thb_per_sol > Decimal::ZERO => round2(total * fx_thb_per_sol),
+        _ => total,
+    }
+}
+
+pub fn pay_payload(
+    pp: &dyn PromptPayEncoder,
+    dest: &PaymentDestination,
+    amount: Decimal,
+) -> String {
     match dest.address.chain() {
         // Solana Pay transfer URI — wallet apps prefill the amount when scanned.
         Chain::Solana => {
@@ -88,7 +102,7 @@ pub fn pay_payload(pp: &dyn PromptPayEncoder, dest: &PaymentDestination, total: 
             format!(
                 "solana:{}?amount={}&message={}{}{}",
                 dest.address.as_str(),
-                total.normalize(),
+                amount.normalize(),
                 dest.id,
                 token,
                 cluster
@@ -104,7 +118,7 @@ pub fn pay_payload(pp: &dyn PromptPayEncoder, dest: &PaymentDestination, total: 
                     dest.id
                 );
             }
-            pp.encode_payload(&target_id, total)
+            pp.encode_payload(&target_id, amount)
         }
         chain => format!(
             "pay:{}:{}:{}",

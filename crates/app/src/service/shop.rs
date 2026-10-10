@@ -1,11 +1,12 @@
 //! Shop lifecycle: create, invites, member role management.
 
-use crate::domain::entities::{Invite, InviteStatus, Shop, ShopMember, User, VatMode};
+use crate::domain::entities::{Currency, Invite, InviteStatus, Shop, ShopMember, User, VatMode};
 use crate::domain::services::{
     DomainRuleError, accept_invite as domain_accept, can_change_role, can_invite,
 };
 use crate::domain::value_objects::{Email, Role, new_id};
 
+use crate::service::subscription::{SubError, ensure_can_create_shop};
 use crate::service::use_cases::AppServices;
 
 pub const INVITE_TTL_HOURS: i64 = 48;
@@ -20,6 +21,7 @@ pub enum ShopError {
     InviteeUnknown,
     InviteNotAcceptable,
     NotFound,
+    Subscription(SubError),
     Rule(DomainRuleError),
     Storage(String),
 }
@@ -41,8 +43,14 @@ pub async fn create_shop(
         name: name.to_owned(),
         vat_mode: VatMode::default(),
         vat_rate: rust_decimal::Decimal::ZERO,
+        fx_thb_per_sol: rust_decimal::Decimal::ZERO,
+        currency: Currency::default(),
+        deleted_at: None,
     };
     tracing::info!(shop_id = %shop.id, "creating shop");
+    ensure_can_create_shop(svc, owner_id)
+        .await
+        .map_err(ShopError::Subscription)?;
     svc.shops.insert(&shop).await?;
     let member = ShopMember {
         shop_id: shop.id,
@@ -132,15 +140,20 @@ pub async fn update_settings(
     shop_id: uuid::Uuid,
     vat_mode: VatMode,
     vat_rate: rust_decimal::Decimal,
+    fx_thb_per_sol: rust_decimal::Decimal,
+    currency: Currency,
 ) -> Result<(), ShopError> {
     require_min_role(svc, actor_id, shop_id, Role::Admin).await?;
     if vat_rate < VAT_RATE_MIN || vat_rate > VAT_RATE_MAX {
         return Err(ShopError::Forbidden);
     }
+    if fx_thb_per_sol < rust_decimal::Decimal::ZERO {
+        return Err(ShopError::Forbidden);
+    }
     svc.shops
-        .update_settings(shop_id, vat_mode, vat_rate)
+        .update_settings(shop_id, vat_mode, vat_rate, fx_thb_per_sol, currency)
         .await?;
-    tracing::info!(shop_id = %shop_id, ?vat_mode, %vat_rate, "shop settings updated");
+    tracing::info!(shop_id = %shop_id, ?vat_mode, %vat_rate, ?currency, "shop settings updated");
     Ok(())
 }
 
@@ -169,12 +182,9 @@ pub async fn list_members(
     let members = svc.members.list_by_shop(shop_id).await?;
     let mut out = Vec::with_capacity(members.len());
     for m in members {
-        let email = svc
-            .users
-            .find_by_id(m.user_id)
-            .await?
-            .map(|u| u.email.as_str().to_owned());
-        out.push((m, email));
+        let owner = svc.users.find_by_id(m.user_id).await?;
+        let label = owner.map(|u| u.label().to_owned()).unwrap_or_default();
+        out.push((m, (!label.is_empty()).then_some(label)));
     }
     Ok(out)
 }

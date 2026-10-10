@@ -1,0 +1,14 @@
+[package]
+name = "music-demo"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+fundsp = "0.20"
+hound = "3"
+
+[profile.release]
+opt-level = 3

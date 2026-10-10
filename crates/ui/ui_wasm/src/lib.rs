@@ -1,6 +1,7 @@
 //! Dioxus wasm app root.
 
 pub mod api_client;
+pub mod camera;
 pub mod ui_interface_app;
 
 pub use ui_interface_app::app_root;

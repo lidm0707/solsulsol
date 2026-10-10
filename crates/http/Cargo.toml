@@ -14,5 +14,6 @@ pos-barcode = { path = "../barcode" }
 axum = { version = "0.8", default-features = false, features = ["json"] }
 tower-http = { version = "0.6", default-features = false, features = ["cors", "trace"] }
 uuid.workspace = true
+rust_decimal.workspace = true
 serde_json.workspace = true
 tracing.workspace = true

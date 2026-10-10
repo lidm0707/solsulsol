@@ -10,6 +10,11 @@ pub struct FetchClient {
 }
 
 const JSON: &str = "application/json";
+const HTTP_FORBIDDEN: u16 = 403;
+const SUBSCRIPTION_REQUIRED: &str = "Active subscription required — open the Subscription tab";
+
+#[derive(serde::Serialize)]
+struct EmptyBody;
 
 impl FetchClient {
     fn url(&self, path: &str) -> String {
@@ -19,7 +24,7 @@ impl FetchClient {
     async fn json<T: serde::de::DeserializeOwned>(req: Request) -> Result<T, String> {
         let res = req.send().await.map_err(|e| e.to_string())?;
         if !res.ok() {
-            return Err(format!("http {}", res.status()));
+            return Err(err_msg(res.status()));
         }
         res.json::<T>().await.map_err(|e| e.to_string())
     }
@@ -29,7 +34,7 @@ impl FetchClient {
         if res.ok() {
             Ok(())
         } else {
-            Err(format!("http {}", res.status()))
+            Err(err_msg(res.status()))
         }
     }
 
@@ -74,6 +79,14 @@ impl FetchClient {
     }
 }
 
+fn err_msg(status: u16) -> String {
+    if status == HTTP_FORBIDDEN {
+        String::from(SUBSCRIPTION_REQUIRED)
+    } else {
+        format!("http {status}")
+    }
+}
+
 // A headerless GET cannot fail to build; this only silences the type system.
 fn impossible_request(e: &str) -> Request {
     web_console(&format!("unreachable request build failure: {e}"));
@@ -92,18 +105,46 @@ fn web_console(msg: &str) {
 }
 
 impl ApiClient for FetchClient {
-    async fn register(&self, req: &RegisterRequest) -> Result<Uuid, String> {
-        #[derive(serde::Deserialize)]
-        struct Out {
-            user_id: Uuid,
-        }
-        let req = self.post_json(pos_api::routes::REGISTER, None, req)?;
-        let out: Out = Self::json(req).await?;
-        Ok(out.user_id)
+    async fn auth_nonce(&self, req: &AuthNonceRequest) -> Result<AuthNonceResponse, String> {
+        let req = self.post_json(pos_api::routes::AUTH_NONCE, None, req)?;
+        Self::json(req).await
     }
 
-    async fn login(&self, req: &LoginRequest) -> Result<LoginResponse, String> {
-        let req = self.post_json(pos_api::routes::LOGIN, None, req)?;
+    async fn auth_verify(&self, req: &AuthVerifyRequest) -> Result<AuthResponse, String> {
+        let req = self.post_json(pos_api::routes::AUTH_VERIFY, None, req)?;
+        Self::json(req).await
+    }
+
+    async fn auth_logout(&self, token: &str) -> Result<(), String> {
+        let req = self.post_json(pos_api::routes::AUTH_LOGOUT, Some(token), &EmptyBody)?;
+        Self::empty(req).await
+    }
+
+    async fn auth_me(&self, token: &str) -> Result<MeResponse, String> {
+        let req = self.get_authed(pos_api::routes::AUTH_ME, token);
+        Self::json(req).await
+    }
+
+    async fn create_payment_order(
+        &self,
+        token: &str,
+        req: &CreatePaymentOrderRequest,
+    ) -> Result<PaymentOrderResponse, String> {
+        let req = self.post_json(pos_api::routes::PAYMENTS_ORDERS, Some(token), req)?;
+        Self::json(req).await
+    }
+
+    async fn verify_payment(
+        &self,
+        token: &str,
+        req: &VerifyPaymentRequest,
+    ) -> Result<SubscriptionResponse, String> {
+        let req = self.post_json(pos_api::routes::PAYMENTS_VERIFY, Some(token), req)?;
+        Self::json(req).await
+    }
+
+    async fn subscription_current(&self, token: &str) -> Result<SubscriptionResponse, String> {
+        let req = self.get_authed(pos_api::routes::SUBSCRIPTIONS_CURRENT, token);
         Self::json(req).await
     }
 
@@ -181,6 +222,16 @@ impl ApiClient for FetchClient {
 
     async fn list_goods(&self, token: &str, shop_id: Uuid) -> Result<Vec<GoodsResponse>, String> {
         let path = pos_api::routes::SHOP_GOODS.replace("{shop_id}", &shop_id.to_string());
+        let req = self.get_authed(&path, token);
+        Self::json(req).await
+    }
+
+    async fn list_goods_sales(
+        &self,
+        token: &str,
+        shop_id: Uuid,
+    ) -> Result<Vec<GoodsSalesResponse>, String> {
+        let path = pos_api::routes::SHOP_GOODS_SALES.replace("{shop_id}", &shop_id.to_string());
         let req = self.get_authed(&path, token);
         Self::json(req).await
     }

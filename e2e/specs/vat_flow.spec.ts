@@ -1,6 +1,12 @@
 import { test, expect } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
+import { apiAuth, conn, ensureUsdc, freshWallet } from "./helpers/solana";
+import { injectMockWallet, gotoUi, uiSignIn, uiSubscribe, saveVideo } from "./helpers/ui";
+
+test.afterEach(async ({ page }) => {
+  await saveVideo(page, "vat_flow");
+});
 
 let stepNo = 0;
 async function shot(page: any, dir: string, name: string) {
@@ -11,7 +17,6 @@ async function shot(page: any, dir: string, name: string) {
 }
 
 const BACKEND = process.env.BACKEND ?? "http://localhost:18080";
-const UI = process.env.UI ?? "http://localhost:8081";
 const ADDRESS = "4Nd1mBQtrMJVYDfZS3vNs3p8zQH4wVzLB6s5aXKc9PqR";
 const VAT_RATE = "10";
 const EAN13 = "4006381333931";
@@ -20,14 +25,13 @@ const EXCLUSIVE_TOTAL = "3.85"; // 3.5 + 10%
 const EXCLUSIVE_VAT = "0.35";
 const INCLUSIVE_VAT = "0.36"; // 4 * 10 / 110, rounded to 2dp
 
-const rand = () => Math.random().toString(36).slice(2, 10);
-
 const FLOW = "vat: exclusive + inclusive — form, total bar, checkout qr, persisted billing";
 
 test(`${FLOW}`, async ({ page }) => {
   test.setTimeout(120_000);
-  const email = `vat-owner-${rand()}@test.dev`;
-  const password = "hunter2234";
+  const wallet = freshWallet();
+  await ensureUsdc(conn());
+  await injectMockWallet(page, wallet);
 
   let request: any = page.request;
   const api = async (method: string, apiPath: string, token?: string, body?: unknown) =>
@@ -40,15 +44,13 @@ test(`${FLOW}`, async ({ page }) => {
       data: body ? JSON.stringify(body) : undefined,
     });
 
-  // 01: register + login + shop
-  await page.goto(`${UI}/?api=${encodeURIComponent(BACKEND)}`);
-  await page.locator('input[placeholder="email"]').fill(email);
-  await page.locator('input[placeholder="password"]').fill(password);
-  await page.getByRole("button", { name: "Register" }).click();
-  await expect(page.locator(".toast.success")).toContainText("registered");
-  await page.getByRole("button", { name: "Login", exact: true }).click();
-  await expect(page.locator('[aria-label="new-shop"]')).toBeVisible({ timeout: 15_000 });
+  // 01: wallet sign-in + subscribe + shop
+  await gotoUi(page);
+  await uiSignIn(page);
   await page.locator('[aria-label="new-shop"]').click();
+  await expect(page.locator(".modal-overlay")).toContainText("Subscription required", { timeout: 15_000 });
+  await uiSubscribe(page);
+  await expect(page.locator('input[placeholder="new shop name"]')).toBeVisible({ timeout: 20_000 });
   await page.locator('input[placeholder="new shop name"]').fill("VAT Cafe");
   await page.locator('[aria-label="create-shop"]').click();
   const shopChip = page.locator(".shop-chip", { hasText: "VAT Cafe" });
@@ -56,8 +58,7 @@ test(`${FLOW}`, async ({ page }) => {
   await shopChip.click();
   await expect(page.locator(".tabbar")).toBeVisible({ timeout: 15_000 });
 
-  const login = await api("POST", "/auth/login", undefined, { email, password });
-  const { token } = await login.json();
+  const { token } = await apiAuth(api, wallet);
   const shops = await (await api("GET", "/shops", token)).json();
   const shopId = shops[0].shop_id;
   const dest = await api("POST", `/shops/${shopId}/destinations`, token, {
@@ -92,6 +93,8 @@ test(`${FLOW}`, async ({ page }) => {
     await page.locator('[aria-label="tab-sell"]').click();
     await expect(page.locator(".goods-tile").first()).toBeVisible({ timeout: 15_000 });
     await page.locator('[aria-label="new-doc"]').click();
+    await expect(page.locator('[aria-label="pay-method"]').first()).toBeVisible({ timeout: 20_000 });
+    await page.locator('[aria-label="pay-method"]').first().click();
     await expect(page.locator(".qr svg").first()).toBeVisible({ timeout: 20_000 });
   };
   const freshSale = async () => {
@@ -106,7 +109,7 @@ test(`${FLOW}`, async ({ page }) => {
   await setVat("Exclusive");
   await shot(page, "vat_flow", "01-vat-exclusive-form-filled");
   await page.locator('[aria-label="save-vat"]').click();
-  await expect(page.locator(".toast.success", { hasText: "VAT settings saved" })).toBeVisible({
+  await expect(page.locator(".toast.success", { hasText: "Payment settings saved" })).toBeVisible({
     timeout: 15_000,
   });
 
@@ -148,7 +151,7 @@ test(`${FLOW}`, async ({ page }) => {
   await setVat("Inclusive");
   await shot(page, "vat_flow", "04-vat-inclusive-form-filled");
   await page.locator('[aria-label="save-vat"]').click();
-  await expect(page.locator(".toast.success", { hasText: "VAT settings saved" })).toBeVisible({
+  await expect(page.locator(".toast.success", { hasText: "Payment settings saved" })).toBeVisible({
     timeout: 15_000,
   });
 

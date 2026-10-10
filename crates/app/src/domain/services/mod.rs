@@ -40,13 +40,16 @@ pub fn is_shop_member(shop_id: uuid::Uuid, member: &ShopMember) -> bool {
     member.shop_id == shop_id
 }
 
-/// Accept an invite if pending and not expired.
+/// Accept an invite if pending and not expired. Email must match when the
+/// user has one linked; wallet-only users accept by invite id (capability).
 pub fn accept_invite(
     invite: &Invite,
     user: &User,
     now: DateTime<Utc>,
 ) -> Result<ShopMember, DomainRuleError> {
-    if invite.email.as_str() != user.email.as_str() {
+    if let Some(email) = &user.email
+        && email.as_str() != invite.email.as_str()
+    {
         return Err(DomainRuleError::Forbidden);
     }
     if !invite.is_acceptable(now) {
