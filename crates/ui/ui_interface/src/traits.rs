@@ -3,11 +3,11 @@
 
 use pos_api::schema::{
     AddDestinationRequest, AddGoodsRequest, AuthNonceRequest, AuthNonceResponse, AuthResponse,
-    AuthVerifyRequest, CheckoutRequest, CreatePaymentOrderRequest, CreateShopRequest,
-    DestinationResponse, GoodsResponse, GoodsSalesResponse, InviteAcceptRequest, InviteRequest,
-    InviteResponse, BillingResponse, MeResponse, PaymentOrderResponse, Role, ShopMemberResponse,
-    ShopResponse, StorageObjectResponse, SubscriptionResponse, UpdateMemberRoleRequest,
-    UpdateShopSettingsRequest, VerifyPaymentRequest,
+    AuthVerifyRequest, BillingResponse, CheckoutRequest, CreatePaymentOrderRequest,
+    CreateShopRequest, DestinationResponse, GoodsResponse, GoodsSalesResponse, InviteAcceptRequest,
+    InviteRequest, InviteResponse, MeResponse, PaymentOrderResponse, Role, ShopMemberResponse,
+    ShopResponse, StorageObjectResponse, SubscriptionResponse, UpdateGoodsRequest,
+    UpdateMemberRoleRequest, UpdateShopSettingsRequest, VerifyPaymentRequest,
 };
 use uuid::Uuid;
 
@@ -59,6 +59,13 @@ pub trait ApiClient {
         req: &UpdateMemberRoleRequest,
     ) -> Result<(), String>;
     async fn add_goods(&self, token: &str, req: &AddGoodsRequest) -> Result<GoodsResponse, String>;
+    async fn update_goods(
+        &self,
+        token: &str,
+        shop_id: Uuid,
+        goods_id: Uuid,
+        req: &UpdateGoodsRequest,
+    ) -> Result<(), String>;
     async fn list_goods(&self, token: &str, shop_id: Uuid) -> Result<Vec<GoodsResponse>, String>;
     async fn list_goods_sales(
         &self,
@@ -75,6 +82,12 @@ pub trait ApiClient {
         token: &str,
         shop_id: Uuid,
     ) -> Result<Vec<DestinationResponse>, String>;
+    async fn remove_destination(
+        &self,
+        token: &str,
+        shop_id: Uuid,
+        dest_id: Uuid,
+    ) -> Result<(), String>;
     async fn checkout(&self, token: &str, req: &CheckoutRequest)
     -> Result<BillingResponse, String>;
     async fn list_billings(

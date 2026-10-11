@@ -15,12 +15,11 @@ pub enum BarcodeError {
     #[error("barcode must contain digits only")]
     NotDigits,
     #[error("checksum mismatch for {format:?}")]
-    BadChecksum { format: crate::format::BarcodeFormat },
+    BadChecksum {
+        format: crate::format::BarcodeFormat,
+    },
     #[error("invalid code39 character: {ch}")]
     BadCode39Char { ch: char },
     #[error("code39 needs {min}..={max} chars")]
-    Code39Length {
-        min: usize,
-        max: usize,
-    },
+    Code39Length { min: usize, max: usize },
 }

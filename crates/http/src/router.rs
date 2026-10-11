@@ -12,8 +12,8 @@ use pos_api::schema::{
     CreateShopRequest, Currency, DestinationResponse, GoodsResponse, GoodsSalesResponse,
     InviteAcceptRequest, InviteRequest, InviteResponse, MeResponse, PaymentOrderResponse,
     PaymentOrderStatusApi, ShopMemberResponse, ShopResponse, SubscriptionResponse,
-    SubscriptionStatusApi, UpdateMemberRoleRequest, UpdateShopSettingsRequest, VatMode,
-    VerifyPaymentRequest,
+    SubscriptionStatusApi, UpdateGoodsRequest, UpdateMemberRoleRequest, UpdateShopSettingsRequest,
+    VatMode, VerifyPaymentRequest,
 };
 use tower_http::cors::CorsLayer;
 #[cfg(not(target_arch = "wasm32"))]
@@ -70,9 +70,6 @@ const fn currency_to_api(c: pos_app::domain::entities::Currency) -> Currency {
 const fn chain_to_api(c: pos_app::domain::value_objects::Chain) -> pos_api::schema::Chain {
     match c {
         pos_app::domain::value_objects::Chain::Solana => pos_api::schema::Chain::Solana,
-        pos_app::domain::value_objects::Chain::Eth => pos_api::schema::Chain::Eth,
-        pos_app::domain::value_objects::Chain::Btc => pos_api::schema::Chain::Btc,
-        pos_app::domain::value_objects::Chain::Binance => pos_api::schema::Chain::Binance,
         pos_app::domain::value_objects::Chain::Bank => pos_api::schema::Chain::Bank,
     }
 }
@@ -80,9 +77,6 @@ const fn chain_to_api(c: pos_app::domain::value_objects::Chain) -> pos_api::sche
 const fn chain_to_domain(c: pos_api::schema::Chain) -> pos_app::domain::value_objects::Chain {
     match c {
         pos_api::schema::Chain::Solana => pos_app::domain::value_objects::Chain::Solana,
-        pos_api::schema::Chain::Eth => pos_app::domain::value_objects::Chain::Eth,
-        pos_api::schema::Chain::Btc => pos_app::domain::value_objects::Chain::Btc,
-        pos_api::schema::Chain::Binance => pos_app::domain::value_objects::Chain::Binance,
         pos_api::schema::Chain::Bank => pos_app::domain::value_objects::Chain::Bank,
     }
 }
@@ -126,7 +120,7 @@ pub fn build_router(state: AppServices) -> Router {
         .route(routes::SHOP_GOODS_SALES, get(handlers::goods_sales))
         .route(
             routes::SHOP_GOODS_ID,
-            axum::routing::delete(handlers::delete_goods),
+            axum::routing::delete(handlers::delete_goods).put(handlers::update_goods),
         )
         .route(
             routes::SHOP_STORAGE_OBJECTS,
@@ -176,6 +170,7 @@ fn map_shop(e: ShopError) -> ApiErrorReponse {
         ShopError::NotMember => ApiError::Unauthorized,
         ShopError::Forbidden | ShopError::Rule(_) => ApiError::Forbidden,
         ShopError::InviteeUnknown | ShopError::NotFound => ApiError::NotFound,
+        ShopError::Duplicate => ApiError::Invalid("receive account already exists".into()),
         ShopError::GoodsBillingd => {
             ApiError::Invalid("goods has billing history and cannot be deleted".into())
         }
@@ -446,6 +441,7 @@ mod handlers {
             vat_rate: s.vat_rate,
             fx_thb_per_usd: s.fx_thb_per_usd,
             currency: currency_to_api(s.currency),
+            your_role: pos_api::schema::Role::Owner,
         }))
     }
 
@@ -481,21 +477,26 @@ mod handlers {
         State(svc): State<AppServices>,
         auth: AuthUser,
     ) -> Api<Vec<ShopResponse>> {
-        let shops = svc
+        let shops_raw = svc
             .shops
             .find_for_user(auth.user_id)
             .await
-            .map_err(|_e| ApiErrorReponse::from(ApiError::Internal))?
-            .into_iter()
-            .map(|s| ShopResponse {
+            .map_err(|_e| ApiErrorReponse::from(ApiError::Internal))?;
+        let mut shops = Vec::with_capacity(shops_raw.len());
+        for s in shops_raw {
+            let role = shop::member_role(&svc, auth.user_id, s.id)
+                .await
+                .unwrap_or(pos_app::domain::value_objects::Role::Employee);
+            shops.push(ShopResponse {
                 shop_id: s.id,
                 name: s.name,
                 vat_mode: vat_mode_to_api(s.vat_mode),
                 vat_rate: s.vat_rate,
                 fx_thb_per_usd: s.fx_thb_per_usd,
                 currency: currency_to_api(s.currency),
-            })
-            .collect();
+                your_role: role_to_api(role),
+            });
+        }
         Ok(axum::Json(shops))
     }
 
@@ -524,6 +525,51 @@ mod handlers {
             &svc,
             auth.user_id,
             shop_id,
+            goods_svc::NewGoods {
+                name: &req.name,
+                price,
+                cost: req.cost,
+                units: req.units,
+                barcode,
+                icon: pos_app::domain::value_objects::GoodsIcon::parse(&req.icon)
+                    .unwrap_or_default(),
+                color: pos_app::domain::value_objects::PastelColor::parse(&req.color)
+                    .unwrap_or_default(),
+                goods_type: pos_app::domain::value_objects::GoodsType::parse(&req.goods_type)
+                    .unwrap_or_default(),
+            },
+        )
+        .await
+        .map_err(map_shop)?;
+        Ok(axum::Json(goods_response(&p)))
+    }
+
+    pub async fn update_goods(
+        State(svc): State<AppServices>,
+        auth: AuthUser,
+        Path((shop_id, goods_id)): Path<(Uuid, Uuid)>,
+        Json(req): Json<UpdateGoodsRequest>,
+    ) -> Api<GoodsResponse> {
+        let price = Money::new(req.price).map_err(|e| ApiError::Invalid(e.to_string()))?;
+        if req.units < 0 {
+            return Err(ApiErrorReponse(ApiError::Invalid(String::from(
+                "units must be >= 0",
+            ))));
+        }
+        let barcode = req
+            .barcode
+            .as_deref()
+            .map(pos_barcode::format::normalize)
+            .filter(|b| !b.is_empty());
+        if let Some(b) = &barcode {
+            pos_barcode::format::validate(b)
+                .map_err(|e| ApiErrorReponse(ApiError::Invalid(e.to_string())))?;
+        }
+        let p = goods_svc::update_goods(
+            &svc,
+            auth.user_id,
+            shop_id,
+            goods_id,
             goods_svc::NewGoods {
                 name: &req.name,
                 price,
@@ -815,7 +861,7 @@ mod handlers {
             qr.as_ref(),
             svc.promptpay.as_ref(),
             &shop,
-            &req.goods_ids,
+            &req.lines(),
             destination,
         )
         .await

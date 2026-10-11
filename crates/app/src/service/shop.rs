@@ -13,6 +13,8 @@ pub const INVITE_TTL_HOURS: i64 = 48;
 pub const VAT_RATE_MIN: rust_decimal::Decimal = rust_decimal::Decimal::ZERO;
 pub const VAT_RATE_MAX: rust_decimal::Decimal =
     rust_decimal::Decimal::from_parts(100, 0, 0, false, 0);
+pub const DEFAULT_FX_THB_PER_USD: rust_decimal::Decimal =
+    rust_decimal::Decimal::from_parts(33, 0, 0, false, 0);
 
 #[derive(Debug)]
 pub enum ShopError {
@@ -21,6 +23,7 @@ pub enum ShopError {
     InviteeUnknown,
     InviteNotAcceptable,
     NotFound,
+    Duplicate,
     GoodsBillingd,
     Subscription(SubError),
     Rule(DomainRuleError),
@@ -44,7 +47,7 @@ pub async fn create_shop(
         name: name.to_owned(),
         vat_mode: VatMode::default(),
         vat_rate: rust_decimal::Decimal::ZERO,
-        fx_thb_per_usd: rust_decimal::Decimal::ZERO,
+        fx_thb_per_usd: DEFAULT_FX_THB_PER_USD,
         currency: Currency::default(),
         deleted_at: None,
     };

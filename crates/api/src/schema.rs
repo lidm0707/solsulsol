@@ -31,9 +31,6 @@ impl Role {
 #[serde(rename_all = "snake_case")]
 pub enum Chain {
     Solana,
-    Eth,
-    Btc,
-    Binance,
     Bank,
 }
 
@@ -189,6 +186,12 @@ pub struct ShopResponse {
     pub fx_thb_per_usd: rust_decimal::Decimal,
     #[serde(default)]
     pub currency: Currency,
+    #[serde(default = "default_role")]
+    pub your_role: Role,
+}
+
+fn default_role() -> Role {
+    Role::Employee
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -241,6 +244,24 @@ pub struct AddGoodsRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateGoodsRequest {
+    pub name: String,
+    pub price: rust_decimal::Decimal,
+    #[serde(default)]
+    pub cost: rust_decimal::Decimal,
+    #[serde(default)]
+    pub units: i64,
+    #[serde(default)]
+    pub barcode: Option<String>,
+    #[serde(default)]
+    pub icon: String,
+    #[serde(default)]
+    pub color: String,
+    #[serde(default)]
+    pub goods_type: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GoodsResponse {
     pub goods_id: Uuid,
     pub shop_id: Uuid,
@@ -291,7 +312,36 @@ pub struct DestinationResponse {
 pub struct CheckoutRequest {
     pub shop_id: Uuid,
     pub goods_ids: Vec<Uuid>,
+    #[serde(default)]
+    pub items: Vec<CheckoutItem>,
     pub destination_id: Uuid,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct CheckoutItem {
+    pub goods_id: Uuid,
+    #[serde(default = "default_qty")]
+    pub qty: u32,
+}
+
+fn default_qty() -> u32 {
+    1
+}
+
+impl CheckoutRequest {
+    /// Cart lines as (goods_id, qty); falls back to `goods_ids` (qty 1)
+    /// for older clients.
+    pub fn lines(&self) -> Vec<(Uuid, u32)> {
+        if self.items.is_empty() {
+            self.goods_ids.iter().map(|id| (*id, 1)).collect()
+        } else {
+            self.items
+                .iter()
+                .filter(|i| i.qty > 0)
+                .map(|i| (i.goods_id, i.qty))
+                .collect()
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

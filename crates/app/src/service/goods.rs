@@ -51,6 +51,40 @@ pub async fn add_goods(
     Ok(goods)
 }
 
+/// Admin edit of goods fields; keeps identity and shop binding immutable.
+pub async fn update_goods(
+    svc: &AppServices,
+    actor_id: uuid::Uuid,
+    shop_id: uuid::Uuid,
+    goods_id: uuid::Uuid,
+    goods: NewGoods<'_>,
+) -> Result<Goods, ShopError> {
+    require_min_role(svc, actor_id, shop_id, Role::Admin).await?;
+    let existing = svc
+        .goods
+        .find_by_id(goods_id)
+        .await?
+        .ok_or(ShopError::NotFound)?;
+    if existing.shop_id != shop_id {
+        return Err(ShopError::NotFound);
+    }
+    let updated = Goods {
+        id: existing.id,
+        shop_id,
+        name: goods.name.to_owned(),
+        price: goods.price,
+        cost: goods.cost,
+        units: goods.units,
+        barcode: goods.barcode,
+        icon: goods.icon,
+        color: goods.color,
+        goods_type: goods.goods_type,
+    };
+    tracing::info!(shop_id = %shop_id, goods_id = %goods_id, "goods updated");
+    svc.goods.update(&updated).await?;
+    Ok(updated)
+}
+
 pub async fn list_goods(
     svc: &AppServices,
     actor_id: uuid::Uuid,

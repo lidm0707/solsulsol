@@ -3,9 +3,9 @@
 use crate::domain::entities::PaymentDestination;
 use crate::domain::value_objects::{ChainAddress, SplToken, new_id};
 
+use crate::domain::value_objects::Role;
 use crate::service::shop::{ShopError, require_min_role};
 use crate::service::use_cases::AppServices;
-use crate::domain::value_objects::Role;
 
 pub async fn add_destination(
     svc: &AppServices,
@@ -15,6 +15,13 @@ pub async fn add_destination(
     token: SplToken,
 ) -> Result<PaymentDestination, ShopError> {
     require_min_role(svc, actor_id, shop_id, Role::Admin).await?;
+    let existing = svc.destinations.list_by_shop(shop_id).await?;
+    if existing
+        .iter()
+        .any(|d| d.address.as_str() == address.as_str() && d.token == token)
+    {
+        return Err(ShopError::Duplicate);
+    }
     let destination = PaymentDestination {
         id: new_id(),
         shop_id,

@@ -1,6 +1,6 @@
 //! Domain services: pure business rules, no I/O here.
 
-use crate::domain::entities::{Invite, Billing, Order, ShopMember, User};
+use crate::domain::entities::{Billing, Invite, Order, ShopMember, User};
 use crate::domain::value_objects::Role;
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;

@@ -156,6 +156,7 @@ pub trait GoodsRepo: Send + Sync {
     async fn insert(&self, goods: &Goods) -> Result<(), String>;
     async fn find_by_shop(&self, shop_id: Uuid) -> Result<Vec<Goods>, String>;
     async fn find_by_id(&self, goods_id: Uuid) -> Result<Option<Goods>, String>;
+    async fn update(&self, goods: &Goods) -> Result<(), String>;
     async fn delete(&self, goods_id: Uuid) -> Result<(), String>;
     /// Removes one unit from stock; errors when the goods is out of stock.
     async fn take_units(&self, goods_id: Uuid) -> Result<(), String>;

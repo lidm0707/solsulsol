@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS shops (
     name           TEXT NOT NULL,
     vat_mode       TEXT NOT NULL DEFAULT 'none',
     vat_rate       NUMERIC(6, 4) NOT NULL DEFAULT 0,
-    fx_thb_per_usd TEXT NOT NULL DEFAULT '0',
+    fx_thb_per_usd TEXT NOT NULL DEFAULT '33',
     currency       TEXT NOT NULL DEFAULT 'usdt',
     deleted_at     TEXT
 );
@@ -168,3 +168,6 @@ CREATE TABLE IF NOT EXISTS storage_usage (
 -- 017: shop currency default flips to 'usdt' (new shops price in USD; the
 -- default lives in the shops CREATE above — SQLite keeps column defaults in
 -- the schema, so fresh DBs already use 'usdt' via the updated CREATE).
+
+-- 018: default FX rate 33 THB per $1; backfill shops still at the old 0 default.
+UPDATE shops SET fx_thb_per_usd = '33' WHERE fx_thb_per_usd = '0';

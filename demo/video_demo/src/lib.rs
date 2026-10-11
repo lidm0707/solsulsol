@@ -104,7 +104,7 @@ impl Video for DemoVideo<'_> {
             .map(|at| AudioTrack::new("chime.wav", Second(at)..Second(at + 3.0)))
             .collect();
         // Ticks mark the mid-slot shot changes inside features 2, 4 and 5.
-        const SHOT_CHANGES: [f32; 3] = [7.5, 17.5, 22.5];
+        const SHOT_CHANGES: [f32; 3] = [11.0, 13.0, 20.5];
         let ticks: Vec<AudioTrack> = SHOT_CHANGES
             .into_iter()
             .map(|at| {

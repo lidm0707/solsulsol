@@ -243,6 +243,20 @@ impl ApiClient for FetchClient {
         Self::json(req).await
     }
 
+    async fn update_goods(
+        &self,
+        token: &str,
+        shop_id: Uuid,
+        goods_id: Uuid,
+        req: &UpdateGoodsRequest,
+    ) -> Result<(), String> {
+        let path = pos_api::routes::SHOP_GOODS_ID
+            .replace("{shop_id}", &shop_id.to_string())
+            .replace("{goods_id}", &goods_id.to_string());
+        let req = self.put_json(&path, token, req)?;
+        Self::empty(req).await
+    }
+
     async fn list_goods_sales(
         &self,
         token: &str,
@@ -272,6 +286,18 @@ impl ApiClient for FetchClient {
         let path = pos_api::routes::SHOP_DESTINATIONS.replace("{shop_id}", &shop_id.to_string());
         let req = self.get_authed(&path, token);
         Self::json(req).await
+    }
+
+    async fn remove_destination(
+        &self,
+        token: &str,
+        shop_id: Uuid,
+        dest_id: Uuid,
+    ) -> Result<(), String> {
+        let path = pos_api::routes::SHOP_DESTINATIONS.replace("{shop_id}", &shop_id.to_string());
+        let path = format!("{path}/{dest_id}");
+        let req = self.delete_authed(&path, token);
+        Self::empty(req).await
     }
 
     async fn checkout(

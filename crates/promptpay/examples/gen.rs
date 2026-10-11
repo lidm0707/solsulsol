@@ -10,7 +10,8 @@ const WALLET_DIGITS: usize = 16;
 const CRC_LEN: usize = 4;
 const PAYLOAD_FORMAT_PREFIX: &str = "000201";
 const CURRENCY_TAG_THB: &str = "5303764";
-const USAGE: &str = "usage: cargo run -p pos-promptpay --example gen -- <phone|national-id|wallet> <amount>";
+const USAGE: &str =
+    "usage: cargo run -p pos-promptpay --example gen -- <phone|national-id|wallet> <amount>";
 
 fn check_target(raw: &str) -> Result<(), String> {
     let digits: String = raw.chars().filter(char::is_ascii_digit).collect();

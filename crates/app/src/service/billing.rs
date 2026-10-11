@@ -31,7 +31,7 @@ pub async fn checkout(
     qr: &dyn QrRenderer,
     pp: &dyn PromptPayEncoder,
     shop: &Shop,
-    goods_ids: &[uuid::Uuid],
+    goods_lines: &[(uuid::Uuid, u32)],
     destination: PaymentDestination,
 ) -> Result<(Billing, Vec<u8>), BillingError> {
     crate::service::subscription::require_active(svc, actor_id)
@@ -40,19 +40,24 @@ pub async fn checkout(
     let shop_id = shop.id;
     let all = svc.goods.find_by_shop(shop_id).await?;
     let mut lines = Vec::new();
-    for id in goods_ids {
+    for (id, qty) in goods_lines {
         let Some(p) = all.iter().find(|p| p.id == *id) else {
             return Err(BillingError::Storage("goods not in shop".into()));
         };
+        if *qty == 0 {
+            continue;
+        }
         if p.units > 0 {
-            svc.goods.take_units(p.id).await?;
+            for _ in 0..*qty {
+                svc.goods.take_units(p.id).await?;
+            }
         }
         lines.push(BillingLine {
             goods_id: p.id,
             name: p.name.clone(),
             price: p.price,
             cost: p.cost,
-            qty: 1,
+            qty: *qty,
         });
     }
     if lines.is_empty() {
@@ -129,21 +134,12 @@ pub fn pay_payload(
             }
             pp.encode_payload(&target_id, amount)
         }
-        chain => format!(
-            "pay:{}:{}:{}",
-            chain_label(chain),
-            dest.address.as_str(),
-            dest.id
-        ),
     }
 }
 
 fn chain_label(chain: Chain) -> &'static str {
     match chain {
         Chain::Solana => "sol",
-        Chain::Eth => "eth",
-        Chain::Btc => "btc",
-        Chain::Binance => "bnb",
         Chain::Bank => "bank",
     }
 }

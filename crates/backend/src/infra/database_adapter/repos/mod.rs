@@ -22,6 +22,7 @@ use rust_decimal::Decimal;
 
 pub const DEFAULT_MAX_CONNECTIONS: u32 = 8;
 const NIL: uuid::Uuid = uuid::Uuid::nil();
+const FALLBACK_ADDRESS: &str = "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa";
 
 pub async fn connect(url: &str) -> Result<PgPool, sqlx::Error> {
     sqlx::postgres::PgPoolOptions::new()
@@ -378,6 +379,25 @@ impl GoodsRepo for PgGoodsRepo {
         Ok(rows.into_iter().next().map(goods_row))
     }
 
+    async fn update(&self, goods: &Goods) -> Result<(), String> {
+        sqlx::query(
+            "UPDATE goods SET name = $1, price = $2, cost = $3, units = $4, barcode = $5, icon = $6, color = $7, goods_type = $8 WHERE id = $9",
+        )
+        .bind(&goods.name)
+        .bind(goods.price.amount())
+        .bind(goods.cost)
+        .bind(goods.units)
+        .bind(&goods.barcode)
+        .bind(goods.icon.as_str())
+        .bind(goods.color.as_str())
+        .bind(goods.goods_type.as_str())
+        .bind(goods.id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
     async fn delete(&self, goods_id: uuid::Uuid) -> Result<(), String> {
         sqlx::query("DELETE FROM goods WHERE id = $1")
             .bind(goods_id)
@@ -396,7 +416,7 @@ type DestinationTuple = (uuid::Uuid, uuid::Uuid, String, String, String);
 
 fn destination_row(row: DestinationTuple) -> PaymentDestination {
     let (id, shop_id, chain, address, token) = row;
-    let chain = Chain::parse(&chain).unwrap_or(Chain::Binance);
+    let chain = Chain::parse(&chain).unwrap_or(Chain::Solana);
     PaymentDestination {
         id,
         shop_id,
@@ -689,7 +709,7 @@ async fn fetch_destination(
             .await
             .map_err(|e| e.to_string())?;
     let Some((dest_id, chain, address, token)) = row else {
-        return ChainAddress::parse(Chain::Btc, "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa")
+        return ChainAddress::parse(Chain::Solana, FALLBACK_ADDRESS)
             .map(|addr| PaymentDestination {
                 id: NIL,
                 shop_id: NIL,
@@ -698,7 +718,7 @@ async fn fetch_destination(
             })
             .map_err(|_| String::from("const fallback address must parse"));
     };
-    let chain = Chain::parse(&chain).unwrap_or(Chain::Binance);
+    let chain = Chain::parse(&chain).unwrap_or(Chain::Solana);
     Ok(PaymentDestination {
         id: dest_id,
         shop_id: NIL,

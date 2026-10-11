@@ -3,8 +3,6 @@
 
 mod common;
 
-
-
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use common::{RECIPIENT, services, test_config};

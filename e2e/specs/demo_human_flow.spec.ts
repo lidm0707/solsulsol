@@ -87,7 +87,9 @@ test(`${FLOW} — desktop`, async ({ page }) => {
   // 03 — receive accounts: Solana wallet + PromptPay (Thai bank)
   await humanClick(page, page.locator('[aria-label="tab-settings"]'));
   await step(page, "settings tab");
-  await humanClick(page, page.locator('[aria-label="section-add-account"]'));
+  await humanClick(page, page.locator('[aria-label="section-receive"]'));
+  await step(page, "receive accounts");
+  await humanClick(page, page.locator('[aria-label="add-account"]'));
   await step(page, "add account form open");
   await humanType(page, page.locator('input[placeholder="address"]'), ADDRESS);
   await step(page, "Solana address pasted, saving");
@@ -95,7 +97,7 @@ test(`${FLOW} — desktop`, async ({ page }) => {
   await expectVisible(page.locator(".list-row", { hasText: "Solana" }), 15_000);
   await step(page, "Solana receive account added");
 
-  await humanClick(page, page.locator('[aria-label="section-add-account"]'));
+  await humanClick(page, page.locator('[aria-label="add-account"]'));
   await page.locator('[aria-label="dest-chain"]').selectOption("Bank");
   await humanType(page, page.locator('input[placeholder="address"]'), PROMPTPAY_ADDRESS);
   await step(page, "PromptPay number pasted, saving");
@@ -103,24 +105,34 @@ test(`${FLOW} — desktop`, async ({ page }) => {
   await expectVisible(page.locator(".list-row", { hasText: "PromptPay" }), 15_000);
   await step(page, "PromptPay receive account added");
 
-  // 04 — tax: VAT inclusive 7% + the THB-per-$1 swap rate
+  // 04 — tax: VAT inclusive 7%, then currency: THB display + 3500 THB per $1
   await humanClick(page, page.locator('[aria-label="section-tax"]'));
   await step(page, "tax settings");
   await page.locator('[aria-label="vat-mode"]').selectOption("Inclusive");
   await humanType(page, page.locator('[aria-label="vat-rate"]'), VAT_RATE);
-  await humanType(page, page.locator('[aria-label="fx-thb-per-usd"]'), FX_THB_PER_USD);
   await pause(page);
-  await step(page, "VAT 7% inclusive + 3500 THB per $1 swap rate, saving");
+  await step(page, "VAT 7% inclusive, saving");
   await humanClick(page, page.locator('[aria-label="save-vat"]'));
   await expectVisible(
     page.locator(".toast.success", { hasText: "saved" }).first(),
     15_000,
   );
   await step(page, "tax settings saved");
+  await humanClick(page, page.locator('[aria-label="section-currency"]'));
+  await step(page, "currency & fx settings");
+  await humanType(page, page.locator('[aria-label="fx-thb-per-usd"]'), FX_THB_PER_USD);
+  await pause(page);
+  await step(page, "3500 THB per $1 swap rate, saving");
+  await humanClick(page, page.locator('[aria-label="save-currency"]'));
+  await expectVisible(
+    page.locator(".toast.success", { hasText: "saved" }).first(),
+    15_000,
+  );
+  await step(page, "currency settings saved");
 
   // 05 — sell: scan espresso by barcode, pick latte, sort by name
   await humanClick(page, page.locator('[aria-label="tab-sell"]'));
-  const scan = page.locator('input[placeholder="scan or type barcode, Enter to add"]');
+  const scan = page.locator('input[placeholder="scan barcode or search name, Enter to add"]');
   await expectVisible(scan, 15_000);
   await step(page, "sell tab, scanning espresso's barcode");
   await humanType(page, scan, ESPRESSO_BARCODE);

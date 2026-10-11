@@ -12,7 +12,6 @@ use pos_backend::domain::services::{
 use pos_backend::domain::value_objects::{Chain, ChainAddress, Email, Money, Role, SplToken};
 
 const SOL_ADDRESS: &str = "4Nd1mBQtrMJVYDfZS3vNs3p8zQH4wVzLB6s5aXKc9PqR";
-const BTC_ADDRESS: &str = "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4";
 const NOW: chrono::DateTime<chrono::Utc> = chrono::DateTime::UNIX_EPOCH;
 
 fn shop_with_vat() -> Shop {
@@ -102,10 +101,8 @@ fn email_rejects_bad_shapes() {
 fn chain_addresses_validate_per_chain() {
     assert!(ChainAddress::parse(Chain::Solana, SOL_ADDRESS).is_ok());
     assert!(ChainAddress::parse(Chain::Solana, "short").is_err());
-    assert!(ChainAddress::parse(Chain::Eth, "0x71C7656EC7ab88b098defB751B7401B5f6d8976F").is_ok());
-    assert!(ChainAddress::parse(Chain::Eth, "71C7656EC7ab88b098defB751B7401B5f6d8976F").is_err());
-    assert!(ChainAddress::parse(Chain::Btc, BTC_ADDRESS).is_ok());
-    assert!(ChainAddress::parse(Chain::Btc, "xyz").is_err());
+    assert!(ChainAddress::parse(Chain::Bank, "1111111111").is_ok());
+    assert!(ChainAddress::parse(Chain::Bank, "").is_err());
 }
 
 #[test]

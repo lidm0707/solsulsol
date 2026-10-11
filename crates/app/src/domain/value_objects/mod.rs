@@ -4,8 +4,6 @@ use rust_decimal::Decimal;
 use thiserror::Error;
 
 pub const SOL_MAX: usize = 44;
-pub const ETH_LEN: usize = 42;
-pub const BTC_MAX: usize = 62;
 
 #[derive(Debug, Error)]
 pub enum ValidationError {
@@ -186,9 +184,6 @@ impl SplToken {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Chain {
     Solana,
-    Eth,
-    Btc,
-    Binance,
     Bank,
 }
 
@@ -197,9 +192,6 @@ impl Chain {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Solana => "solana",
-            Self::Eth => "eth",
-            Self::Btc => "btc",
-            Self::Binance => "binance",
             Self::Bank => "bank",
         }
     }
@@ -208,9 +200,6 @@ impl Chain {
     pub fn parse(raw: &str) -> Option<Self> {
         match raw {
             "solana" => Some(Self::Solana),
-            "eth" => Some(Self::Eth),
-            "btc" => Some(Self::Btc),
-            "binance" => Some(Self::Binance),
             "bank" => Some(Self::Bank),
             _ => None,
         }
@@ -229,25 +218,12 @@ impl ChainAddress {
             .all(|c| c.is_ascii_alphanumeric() && !matches!(c, '0' | 'O' | 'I' | 'l'))
     }
 
-    fn is_hex(raw: &str) -> bool {
-        raw.len() > 2 && raw[2..].chars().all(|c| c.is_ascii_hexdigit())
-    }
-
     pub fn parse(chain: Chain, raw: &str) -> Result<Self, ValidationError> {
         let ok = match chain {
             Chain::Solana => {
                 let len = raw.len();
                 (SOL_MIN..=SOL_MAX).contains(&len) && Self::is_base58(raw)
             }
-            Chain::Eth => raw.len() == ETH_LEN && raw.starts_with("0x") && Self::is_hex(raw),
-            Chain::Btc => {
-                let len = raw.len();
-                let bech32 =
-                    raw.starts_with("bc1") && raw.chars().all(|c| c.is_ascii_alphanumeric());
-                let base58 = Self::is_base58(raw) && (raw.starts_with('1') || raw.starts_with('3'));
-                (bech32 || base58) && len <= BTC_MAX
-            }
-            Chain::Binance => !raw.is_empty() && raw.chars().all(|c| c.is_ascii_alphanumeric()),
             Chain::Bank => {
                 let len = raw.len();
                 (BANK_MIN..=BANK_MAX).contains(&len)

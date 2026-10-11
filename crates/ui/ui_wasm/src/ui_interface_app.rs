@@ -6,7 +6,8 @@ use pos_api::schema::{
     AddDestinationRequest, AddGoodsRequest, AuthNonceRequest, AuthVerifyRequest, BillingPeriodApi,
     Chain, CheckoutRequest, CreatePaymentOrderRequest, CreateShopRequest, Currency,
     PaymentOrderResponse, SplToken, StorageObjectResponse, SubscriptionResponse,
-    SubscriptionStatusApi, UpdateShopSettingsRequest, VatMode, VerifyPaymentRequest,
+    SubscriptionStatusApi, UpdateGoodsRequest, UpdateShopSettingsRequest, VatMode,
+    VerifyPaymentRequest,
 };
 use reslt_core::prelude::*;
 use std::future::Future;
@@ -23,6 +24,7 @@ use ui_interface::traits::ApiClient;
 
 const DEFAULT_BASE: &str = "/api";
 const BILLING_TITLE: &str = "Billing";
+const DETAIL_TITLE: &str = "Sale detail";
 const PAY_METHOD_TITLE: &str = "Choose payment";
 const QR_TTL_MS: i64 = 5 * 60 * 1000;
 const TICK_MS: i32 = 1000;
@@ -60,8 +62,9 @@ const SUB_COPY_LABEL: &str = "copy";
 const SUB_MERCHANT_LABEL: &str = "Pay this USDC transfer, then verify:";
 const GOODS_NAME_REQUIRED_MSG: &str = "name is required";
 const GOODS_NUMBER_INVALID_MSG: &str = "price, cost and units must be valid numbers";
-const GOODS_MANAGE_TITLE: &str = "Manage";
+const GOODS_EDIT_LABEL: &str = "edit";
 const GOODS_DELETE_LABEL: &str = "delete";
+const DEST_DELETE_LABEL: &str = "delete";
 const STORAGE_TITLE: &str = "Storage";
 const STORAGE_REFRESH_LABEL: &str = "Refresh";
 const STORAGE_EMPTY_MSG: &str = "no storage objects yet";
@@ -144,6 +147,9 @@ const ICON_REPORTS: &str = "M4 20V10m6 10V4m6 16v-7m4 7H2";
 const ICON_SETTINGS: &str = "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm7.4-3a7.4 7.4 0 0 0-.1-1.2l2-1.5-2-3.5-2.4 1a7.4 7.4 0 0 0-2-1.2L14.5 3h-5l-.4 2.6a7.4 7.4 0 0 0-2 1.2l-2.4-1-2 3.5 2 1.5a7.4 7.4 0 0 0 0 2.4l-2 1.5 2 3.5 2.4-1a7.4 7.4 0 0 0 2 1.2l.4 2.6h5l.4-2.6a7.4 7.4 0 0 0 2-1.2l2.4 1 2-3.5-2-1.5c.1-.4.1-.8.1-1.2Z";
 const ICON_LOGOUT: &str = "M15 4h4v16h-4M11 8l4 4-4 4m4-4H3";
 const ICON_ADD: &str = "M12 5v14M5 12h14";
+const ICON_QTY: &str = "M4 7h9m4 0h3M4 17h3m4 0h9M15 4.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5ZM9 14.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5Z";
+const ICON_CART: &str =
+    "M4 5h2l2.2 11h10.3l2-8H7M10 20a1 1 0 1 0 0-2 1 1 0 0 0 0 2Zm8 0a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z";
 
 const DEFAULT_ICON_KEY: &str = "package";
 const DEFAULT_GOODS_TYPE: &str = "other";
@@ -171,6 +177,7 @@ const DEFAULT_ICON_PATH: &str = "M12 3 4 7v10l8 4 8-4V7l-8-4ZM4 7l8 4 8-4M12 11v
 const DEFAULT_COLOR_KEY: &str = "c01";
 const DEFAULT_COLOR_HEX: &str = "#FFADAD";
 const GOODS_SORT_KEY: &str = "pos.goods.sort";
+const AUTH_TOKEN_KEY: &str = "pos.auth.token";
 const TABLE_SORT_KEY: &str = "pos.goods.table.sort";
 const SORT_STORE_SEP: &str = ":";
 
@@ -465,7 +472,14 @@ impl SaleView {
     const DOCS_LABEL: &str = "Documents";
 }
 
-const SCAN_PLACEHOLDER: &str = "scan or type barcode, Enter to add";
+const SCAN_PLACEHOLDER: &str = "scan barcode or search name, Enter to add";
+const CART_TITLE: &str = "Cart";
+const CART_CLEAR_LABEL: &str = "clear";
+const CART_ITEMS_WORD: &str = "items";
+const CART_EMPTY_MSG: &str = "cart is empty — tap goods to add";
+const QTY_DONE_LABEL: &str = "done";
+const SEARCH_NO_MATCH_MSG: &str = "no matching goods: ";
+const SEARCH_MULTI_MATCH_MSG: &str = "multiple goods match, type more: ";
 const UNKNOWN_BARCODE_PREFIX: &str = "unknown barcode: ";
 const CAMERA_START_LABEL: &str = "Scan with camera";
 const CAMERA_STOP_LABEL: &str = "Stop camera";
@@ -506,15 +520,37 @@ fn barcode_format_parse(key: &str) -> Option<pos_barcode::format::BarcodeFormat>
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct CartItem {
+    goods_id: Uuid,
+    qty: u32,
+}
+
+const CART_QTY_STEP: u32 = 1;
+
+impl CartItem {
+    fn new(goods_id: Uuid) -> Self {
+        Self {
+            goods_id,
+            qty: CART_QTY_STEP,
+        }
+    }
+
+    fn bump(&mut self, by: u32) {
+        self.qty += by;
+    }
+}
+
 fn add_by_barcode(
     goods: &[pos_api::schema::GoodsResponse],
     code: &str,
-    selected: &mut Vec<Uuid>,
+    selected: &mut Vec<CartItem>,
 ) -> bool {
     match goods.iter().find(|g| g.barcode.as_deref() == Some(code)) {
         Some(g) => {
-            if !selected.contains(&g.goods_id) {
-                selected.push(g.goods_id);
+            match selected.iter_mut().find(|c| c.goods_id == g.goods_id) {
+                Some(item) => item.bump(CART_QTY_STEP),
+                None => selected.push(CartItem::new(g.goods_id)),
             }
             true
         }
@@ -525,7 +561,7 @@ fn add_by_barcode(
 async fn run_camera_scanner(
     mut camera_on: Signal<bool>,
     goods: Signal<Vec<pos_api::schema::GoodsResponse>>,
-    mut selected: Signal<Vec<Uuid>>,
+    mut selected: Signal<Vec<CartItem>>,
     mut toast: UseToast,
 ) {
     let video = loop {
@@ -649,8 +685,8 @@ impl SettingsGroup {
             Self::Subscription => &[SettingsSection::Renew],
             Self::Payments => &[
                 SettingsSection::Receive,
-                SettingsSection::AddAccount,
                 SettingsSection::Tax,
+                SettingsSection::Currency,
             ],
             Self::Usage => &[SettingsSection::Usage, SettingsSection::Storage],
         }
@@ -663,6 +699,7 @@ enum SettingsSection {
     Receive,
     AddAccount,
     Tax,
+    Currency,
     Usage,
     Storage,
 }
@@ -674,6 +711,7 @@ impl SettingsSection {
             Self::Receive => "section-receive",
             Self::AddAccount => "section-add-account",
             Self::Tax => "section-tax",
+            Self::Currency => "section-currency",
             Self::Usage => "section-usage",
             Self::Storage => "section-storage",
         }
@@ -684,6 +722,7 @@ impl SettingsSection {
             Self::Receive => "Receive accounts",
             Self::AddAccount => "Add account",
             Self::Tax => "Tax / VAT",
+            Self::Currency => "Currency & FX",
             Self::Usage => "Usage",
             Self::Storage => "Storage",
         }
@@ -733,9 +772,24 @@ fn goods_icon_of(g: &pos_api::schema::GoodsResponse) -> Element {
 }
 
 pub fn app_root() -> Element {
-    let token = use_signal(|| Option::<String>::None);
+    let token = use_signal(|| ls_get(AUTH_TOKEN_KEY).filter(|t| !t.is_empty()));
     let base = use_signal(api_base);
     use_toast_provider();
+
+    let check_base = base();
+    use_future(move || {
+        let client = FetchClient {
+            base_url: check_base.clone(),
+        };
+        let mut token = token;
+        async move {
+            let Some(t) = token() else { return };
+            if client.auth_me(&t).await.is_err() {
+                ls_set(AUTH_TOKEN_KEY, "");
+                token.set(None);
+            }
+        }
+    });
 
     rsx! {
         style { {STYLE} }
@@ -843,6 +897,7 @@ fn AuthView(token: Signal<Option<String>>, base: String) -> Element {
         let mut wallet = wallet.clone();
         move |_| {
             wallet.disconnect();
+            ls_set(AUTH_TOKEN_KEY, "");
             token.set(None);
         }
     };
@@ -890,7 +945,10 @@ fn AuthView(token: Signal<Option<String>>, base: String) -> Element {
                     })
                     .await
                 {
-                    Ok(res) => token.set(Some(res.token)),
+                    Ok(res) => {
+                        ls_set(AUTH_TOKEN_KEY, &res.token);
+                        token.set(Some(res.token));
+                    }
                     Err(e) => notify(&mut toast, &e, true),
                 }
                 busy.set(false);
@@ -997,11 +1055,15 @@ async fn sub_gate_enter(
 fn Dashboard(token: Signal<Option<String>>, base: String) -> Element {
     use_modal_provider();
     let token_str = move || token().unwrap_or_default();
-    let mut shop_id = use_signal(|| Option::<Uuid>::None);
+    let mut shop_id = use_signal(|| query_param("shop").and_then(|v| v.parse::<Uuid>().ok()));
     let shops = use_signal(Vec::<pos_api::schema::ShopResponse>::new);
     let mut new_shop = use_signal(String::new);
     let mut sub = use_signal(|| Option::<SubscriptionResponse>::None);
     let mut gate_shop = use_signal(|| Option::<Uuid>::None);
+    use_effect(move || match shop_id() {
+        Some(sid) => push_query_param("shop", &sid.to_string()),
+        None => push_query_param("shop", ""),
+    });
     let modal = use_modal();
     let toast = use_toast();
 
@@ -1242,12 +1304,22 @@ fn ShopPanel(
     shop_id: Uuid,
     token_signal: Signal<Option<String>>,
 ) -> Element {
-    let mut tab = use_signal(|| Tab::Sell);
+    let mut tab = use_signal(|| {
+        query_param("tab")
+            .and_then(|v| {
+                [Tab::Sell, Tab::Goods, Tab::Reports, Tab::Settings]
+                    .into_iter()
+                    .find(|t| t.id() == v)
+            })
+            .unwrap_or(Tab::Sell)
+    });
     let me = use_signal(|| Option::<pos_api::schema::MeResponse>::None);
+    let shops = use_signal(Vec::<pos_api::schema::ShopResponse>::new);
     {
         let me_base = base.clone();
         let me_token = token.clone();
         let mut me = me;
+        let mut shops = shops;
         use_future(move || {
             let client = FetchClient {
                 base_url: me_base.clone(),
@@ -1257,10 +1329,21 @@ fn ShopPanel(
                 if let Ok(m) = client.auth_me(&token).await {
                     me.set(Some(m));
                 }
+                if let Ok(s) = client.list_shops(&token).await {
+                    shops.set(s);
+                }
             }
         });
     }
-    let is_admin = me().is_some_and(|m| is_admin_role(m.role));
+    let shop_role = shops()
+        .into_iter()
+        .find(|s| s.shop_id == shop_id)
+        .map(|s| s.your_role);
+    use_effect(move || push_query_param("tab", tab().id()));
+    let is_admin = match shop_role {
+        Some(r) => is_admin_role(r),
+        None => me().is_some_and(|m| is_admin_role(m.role)),
+    };
     rsx! {
         div { class: "panel",
             Header { token_signal, base: base.clone() }
@@ -1301,6 +1384,7 @@ fn Header(token_signal: Signal<Option<String>>, base: String) -> Element {
                     let auth_token = token_signal.read().clone().unwrap_or_default();
                     let mut token = token_signal;
                     let mut toast = toast.clone();
+                    ls_set(AUTH_TOKEN_KEY, "");
                     token.set(None);
                     spawn(async move {
                         if !auth_token.is_empty()
@@ -1357,13 +1441,13 @@ struct Charge {
 fn SellTab(token: String, base: String, shop_id: Uuid) -> Element {
     let mut goods = use_signal(Vec::<pos_api::schema::GoodsResponse>::new);
     let mut destinations = use_signal(Vec::<pos_api::schema::DestinationResponse>::new);
-    let mut selected_goods = use_signal(Vec::<Uuid>::new);
+    let mut selected_goods = use_signal(Vec::<CartItem>::new);
     let charge = use_signal(|| Option::<Charge>::None);
     let modal = use_modal();
     let mut now = use_signal(now_ms);
     let mut view = use_signal(|| SaleView::New);
     let mut docs = use_signal(Vec::<pos_api::schema::BillingResponse>::new);
-    let mut held = use_signal(Vec::<Vec<Uuid>>::new);
+    let mut held = use_signal(Vec::<Vec<CartItem>>::new);
     let mut scan_input = use_signal(String::new);
     let mut camera_on = use_signal(|| false);
     let mut cam_status = use_signal(|| Option::<String>::None);
@@ -1409,12 +1493,22 @@ fn SellTab(token: String, base: String, shop_id: Uuid) -> Element {
         }
     });
 
-    let picked: Vec<pos_api::schema::GoodsResponse> = goods()
+    let line_total = |id: Uuid| -> rust_decimal::Decimal {
+        let qty = selected_goods()
+            .iter()
+            .find(|c| c.goods_id == id)
+            .map(|c| c.qty)
+            .unwrap_or(CART_QTY_STEP);
+        goods()
+            .iter()
+            .find(|g| g.goods_id == id)
+            .map(|g| g.price * rust_decimal::Decimal::from(qty))
+            .unwrap_or_default()
+    };
+    let subtotal: rust_decimal::Decimal = selected_goods()
         .iter()
-        .filter(|g| selected_goods().contains(&g.goods_id))
-        .cloned()
-        .collect();
-    let subtotal: rust_decimal::Decimal = picked.iter().map(|g| g.price).sum();
+        .map(|c| line_total(c.goods_id))
+        .sum();
     let shop_cfg = shop();
     let (vat_mode, vat_rate, fx, shop_currency) = shop_cfg
         .map(|s| (s.vat_mode, s.vat_rate, s.fx_thb_per_usd, s.currency))
@@ -1441,8 +1535,6 @@ fn SellTab(token: String, base: String, shop_id: Uuid) -> Element {
         pos_api::schema::VatMode::Exclusive => subtotal + vat_amount,
         _ => subtotal,
     };
-    let active_charge = charge().filter(|c| now() < c.expires_at);
-    let expired = charge().is_some() && active_charge.is_none();
     let held_labels: Vec<String> = held()
         .iter()
         .enumerate()
@@ -1458,16 +1550,14 @@ fn SellTab(token: String, base: String, shop_id: Uuid) -> Element {
         .collect();
     let mut picked_destination = use_signal(|| Option::<Uuid>::None);
     let destinations_now = destinations();
+    let cart_count = selected_goods().len();
     let destination_id = picked_destination()
         .filter(|id| destinations_now.iter().any(|d| &d.destination_id == id))
         .or_else(|| destinations_now.first().map(|d| d.destination_id));
 
     rsx! {
-        div { class: "stack",
-            if active_charge.is_some() || expired {
-                QrModalContent { charge, now }
-            } else {
-                div { class: "settings-tabs",
+        div { class: "stack sell-stack",
+            div { class: "settings-tabs",
                     button {
                         class: if view() == SaleView::New { "settings-tab active" } else { "settings-tab" },
                         onclick: move |_| view.set(SaleView::New),
@@ -1539,11 +1629,24 @@ fn SellTab(token: String, base: String, shop_id: Uuid) -> Element {
                             }
                             let mut cur = selected_goods().clone();
                             if !add_by_barcode(&goods(), &code, &mut cur) {
-                                notify(
-                                    &mut toast,
-                                    &format!("{UNKNOWN_BARCODE_PREFIX}{code}"),
-                                    true,
-                                );
+                                match name_matches(&goods(), &code).as_slice() {
+                                    [id] => {
+                                        match cur.iter_mut().find(|c| c.goods_id == *id) {
+                                            Some(item) => item.bump(CART_QTY_STEP),
+                                            None => cur.push(CartItem::new(*id)),
+                                        }
+                                    }
+                                    [] => notify(
+                                        &mut toast,
+                                        &format!("{SEARCH_NO_MATCH_MSG}{code}"),
+                                        true,
+                                    ),
+                                    _ => notify(
+                                        &mut toast,
+                                        &format!("{SEARCH_MULTI_MATCH_MSG}{code}"),
+                                        true,
+                                    ),
+                                }
                             }
                             selected_goods.set(cur);
                         },
@@ -1593,7 +1696,7 @@ fn SellTab(token: String, base: String, shop_id: Uuid) -> Element {
                 div { class: "stack",
                         div { class: "row split",
                             select {
-                                class: "field",
+                                class: "field sort-select",
                                 "aria-label": "goods-sort",
                                 value: "{sort().key()}",
                                 onchange: move |e| {
@@ -1607,12 +1710,16 @@ fn SellTab(token: String, base: String, shop_id: Uuid) -> Element {
                             }
                         }
                         div { class: "goods-grid",
-                            for g in sorted_sell_goods(&goods(), &sales(), sort()) {
+                            for g in sorted_sell_goods(&search_filtered(&goods(), &scan_input()), &sales(), sort()) {
                                 button {
-                                    class: if selected_goods().contains(&g.goods_id) { "goods-tile picked" } else { "goods-tile" },
+                                    class: if selected_goods().iter().any(|c| c.goods_id == g.goods_id) { "goods-tile picked" } else { "goods-tile" },
                                     onclick: move |_| {
                                         let mut cur = selected_goods().clone();
-                                        if let Some(pos) = cur.iter().position(|x| *x == g.goods_id) { cur.remove(pos); } else { cur.push(g.goods_id); }
+                                        if let Some(pos) = cur.iter().position(|c| c.goods_id == g.goods_id) {
+                                            cur.remove(pos);
+                                        } else {
+                                            cur.push(CartItem::new(g.goods_id));
+                                        }
                                         selected_goods.set(cur);
                                     },
                                     {goods_icon_of(&g)}
@@ -1632,6 +1739,38 @@ fn SellTab(token: String, base: String, shop_id: Uuid) -> Element {
                                 p { class: "dim", "no goods — add them in the Goods tab" }
                             }
                         }
+                }
+                button {
+                    class: "fab cart",
+                    "aria-label": "open-cart",
+                    disabled: "{selected_goods().is_empty()}",
+                    onclick: {
+                        let cart_modal = modal.clone();
+                        move |_| {
+                            let mut modal = cart_modal.clone();
+                            modal.set_title(CART_TITLE);
+                            modal.set_content(rsx! {
+                                CartModal { selected_goods, goods, sym }
+                            });
+                            modal.open();
+                        }
+                    },
+                    Icon { path: ICON_CART, size: 24 }
+                    if cart_count > 0 {
+                        span { class: "fab-badge", "{cart_count}" }
+                    }
+                }
+                button {
+                    class: "fab hold",
+                    "aria-label": "hold-bill",
+                    disabled: "{selected_goods().is_empty() || held().len() >= HELD_BILL_MAX}",
+                    onclick: move |_| {
+                        let mut cur = held().clone();
+                        cur.push(selected_goods().clone());
+                        held.set(cur);
+                        selected_goods.set(Vec::new());
+                    },
+                    Icon { path: ICON_HOLD, size: 24 }
                 }
                 if total > rust_decimal::Decimal::ZERO {
                     div { class: "total-bar",
@@ -1658,18 +1797,6 @@ fn SellTab(token: String, base: String, shop_id: Uuid) -> Element {
                     }
                 }
                 button {
-                    class: "fab hold",
-                    "aria-label": "hold-bill",
-                    disabled: "{selected_goods().is_empty() || held().len() >= HELD_BILL_MAX}",
-                    onclick: move |_| {
-                        let mut cur = held().clone();
-                        cur.push(selected_goods().clone());
-                        held.set(cur);
-                        selected_goods.set(Vec::new());
-                    },
-                    Icon { path: ICON_HOLD, size: 24 }
-                }
-                button {
                     class: "fab",
                     "aria-label": "new-doc",
                     disabled: "{selected_goods().is_empty() || destinations().is_empty()}",
@@ -1678,7 +1805,13 @@ fn SellTab(token: String, base: String, shop_id: Uuid) -> Element {
                         let base = base.clone();
                         let token = token.clone();
                         move |_| {
-                            let goods_ids = selected_goods().clone();
+                            let cart_items = selected_goods()
+                                .iter()
+                                .map(|c| pos_api::schema::CheckoutItem {
+                                    goods_id: c.goods_id,
+                                    qty: c.qty,
+                                })
+                                .collect();
                             let mut modal = modal.clone();
                             modal.set_title(PAY_METHOD_TITLE);
                             modal.set_content(rsx! {
@@ -1686,7 +1819,7 @@ fn SellTab(token: String, base: String, shop_id: Uuid) -> Element {
                                     shop_id,
                                     base: base.clone(),
                                     token: token.clone(),
-                                    goods_ids,
+                                    items: cart_items,
                                     destinations: destinations.read().clone(),
                                     total,
                                     currency: shop_currency,
@@ -1703,11 +1836,140 @@ fn SellTab(token: String, base: String, shop_id: Uuid) -> Element {
                     },
                     Icon { path: ICON_ADD, size: 28 }
                 }
-                    },
+                },
                     SaleView::Docs => rsx! {
                         DocumentsList { docs, base: base.clone(), sym, charge, now }
                     },
                 }
+        }
+    }
+}
+
+#[component]
+fn CartModal(
+    selected_goods: Signal<Vec<CartItem>>,
+    goods: Signal<Vec<pos_api::schema::GoodsResponse>>,
+    sym: &'static str,
+) -> Element {
+    let mut modal = use_modal();
+    let count = selected_goods().len();
+    rsx! {
+        div { class: "stack",
+            div { class: "cart-head",
+                span { class: "dim small", "{count} {CART_ITEMS_WORD}" }
+                span { class: "spacer" }
+                button {
+                    class: "cart-clear",
+                    "aria-label": "clear-cart",
+                    disabled: "{selected_goods().is_empty()}",
+                    onclick: move |_| selected_goods.set(Vec::new()),
+                    "{CART_CLEAR_LABEL}"
+                }
+            }
+            if selected_goods().is_empty() {
+                p { class: "dim pad", "{CART_EMPTY_MSG}" }
+            }
+            div { class: "stack cart-list",
+                for item in selected_goods().iter().cloned() {
+                    CartRow { item, selected_goods, goods, sym }
+                }
+            }
+            button {
+                class: "btn ghost full",
+                "aria-label": "close-cart",
+                onclick: move |_| modal.close(),
+                "close"
+            }
+        }
+    }
+}
+
+#[component]
+fn CartRow(
+    item: CartItem,
+    selected_goods: Signal<Vec<CartItem>>,
+    goods: Signal<Vec<pos_api::schema::GoodsResponse>>,
+    sym: &'static str,
+) -> Element {
+    let modal = use_modal();
+    let goods_item = goods()
+        .iter()
+        .find(|g| g.goods_id == item.goods_id)
+        .cloned();
+    let name = goods_item
+        .as_ref()
+        .map(|g| g.name.clone())
+        .unwrap_or_default();
+    let price = goods_item.map(|g| g.price).unwrap_or_default();
+    let line = price * rust_decimal::Decimal::from(item.qty);
+    let row_modal = modal.clone();
+    let row_name = name.clone();
+    rsx! {
+        div { class: "row split cart-row",
+            span { class: "goods-name", "{name} "
+                span { class: "dim small", "x{item.qty}" }
+            }
+            span { class: "row cart-qty",
+                span { class: "goods-price", "{sym} {line.normalize()}" }
+                button {
+                    class: "btn-circle",
+                    "aria-label": "edit-qty",
+                    onclick: move |_| {
+                        let mut modal = row_modal.clone();
+                        modal.set_title(row_name.as_str());
+                        modal.set_content(rsx! {
+                            QtyEdit { goods_id: item.goods_id, selected_goods }
+                        });
+                        modal.open();
+                    },
+                    Icon { path: ICON_QTY, size: 18 }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn QtyEdit(goods_id: Uuid, selected_goods: Signal<Vec<CartItem>>) -> Element {
+    let mut modal = use_modal();
+    let mut qty = use_signal(|| {
+        selected_goods()
+            .iter()
+            .find(|c| c.goods_id == goods_id)
+            .map(|c| c.qty)
+            .unwrap_or(CART_QTY_STEP)
+    });
+    let save = move |_| {
+        let mut cur = selected_goods().clone();
+        if let Some(item) = cur.iter_mut().find(|c| c.goods_id == goods_id) {
+            item.qty = qty();
+        }
+        selected_goods.set(cur);
+        modal.close();
+    };
+    rsx! {
+        div { class: "stack",
+            div { class: "qty-edit",
+                button {
+                    class: "qty-btn qty-btn-lg",
+                    "aria-label": "qty-dec",
+                    disabled: "{qty() <= CART_QTY_STEP}",
+                    onclick: move |_| qty.set((qty()).saturating_sub(CART_QTY_STEP)),
+                    "−"
+                }
+                span { class: "qty-num qty-num-lg", "x{qty}" }
+                button {
+                    class: "qty-btn qty-btn-lg",
+                    "aria-label": "qty-inc",
+                    onclick: move |_| qty.set(qty() + CART_QTY_STEP),
+                    "+"
+                }
+            }
+            button {
+                class: "btn primary full",
+                "aria-label": "qty-done",
+                onclick: save,
+                "{QTY_DONE_LABEL}"
             }
         }
     }
@@ -1721,44 +1983,12 @@ fn DocumentsList(
     charge: Signal<Option<Charge>>,
     now: Signal<i64>,
 ) -> Element {
-    let modal = use_modal();
-    let show = move |v: rust_decimal::Decimal| format!("{sym}{}", v.round_dp(2).normalize());
     rsx! {
         div { class: "stack",
             h2 { class: "page-title", "{SaleView::DOCS_LABEL}" }
             div { class: "list",
                 for inv in docs().iter().cloned() {
-                    div { class: "list-row",
-                        div { class: "goods-col",
-                            span { class: "goods-name", {inv.lines.first().map(|l| l.name.clone()).unwrap_or_default()} }
-                            span { class: "dim small", "{chain_label(inv.destination.chain)} · margin {show(inv.total - inv.cost)}" }
-                        }
-                        div { class: "goods-col right",
-                            span { class: "goods-price", "{show(inv.total)}" }
-                            button {
-                                class: "dim small pdf-link",
-                                "aria-label": "show-qr",
-                                onclick: {
-                                    let billing = inv.clone();
-                                    let base = base.clone();
-                                    let mut modal = modal.clone();
-                                    move |_| {
-                                        let pdf_url = format!("{}{}", base.trim_end_matches('/'), billing.pdf_url);
-                                        charge.set(Some(Charge {
-                                            billing: billing.clone(),
-                                            expires_at: now_ms() + QR_TTL_MS,
-                                            pdf_url,
-                                        }));
-                                        modal.set_title(BILLING_TITLE);
-                                        modal.set_content(rsx! { QrModalContent { charge, now } });
-                                        modal.open();
-                                    }
-                                },
-                                "QR"
-                            }
-                            a { class: "dim small pdf-link", href: "{base}{inv.pdf_url}", target: "_blank", "PDF" }
-                        }
-                    }
+                    DocumentRow { inv, base: base.clone(), sym, charge, now }
                 }
                 if docs().is_empty() {
                     p { class: "dim pad", "no documents yet" }
@@ -1769,16 +1999,123 @@ fn DocumentsList(
 }
 
 #[component]
+fn DocumentRow(
+    inv: pos_api::schema::BillingResponse,
+    base: String,
+    sym: &'static str,
+    charge: Signal<Option<Charge>>,
+    now: Signal<i64>,
+) -> Element {
+    let modal = use_modal();
+    let show = move |v: rust_decimal::Decimal| format!("{sym}{}", v.round_dp(2).normalize());
+    rsx! {
+        div {
+            class: "list-row clickable",
+            "aria-label": "document-row",
+            onclick: {
+                let billing = inv.clone();
+                let detail_base = base.clone();
+                let mut row_modal = modal.clone();
+                move |_| {
+                    row_modal.set_title(DETAIL_TITLE);
+                    row_modal.set_content(rsx! { BillingDetail { billing: billing.clone(), base: detail_base.clone(), charge, now } });
+                    row_modal.open();
+                }
+            },
+            div { class: "goods-col",
+                span { class: "goods-name", {inv.lines.first().map(|l| l.name.clone()).unwrap_or_default()} }
+                span { class: "dim small", "{chain_label(inv.destination.chain)} · margin {show(inv.total - inv.cost)}" }
+            }
+            div { class: "goods-col right",
+                span { class: "goods-price", "{show(inv.total)}" }
+                button {
+                    class: "dim small pdf-link",
+                    "aria-label": "show-qr",
+                    onclick: {
+                        let billing = inv.clone();
+                        let base = base.clone();
+                        let mut modal = modal.clone();
+                        move |e: dioxus::prelude::MouseEvent| {
+                            e.stop_propagation();
+                            let pdf_url = format!("{}{}", base.trim_end_matches('/'), billing.pdf_url);
+                            charge.set(Some(Charge {
+                                billing: billing.clone(),
+                                expires_at: now_ms() + QR_TTL_MS,
+                                pdf_url,
+                            }));
+                            modal.set_title(BILLING_TITLE);
+                            modal.set_content(rsx! { QrModalContent { charge, now } });
+                            modal.open();
+                        }
+                    },
+                    "QR"
+                }
+                a { class: "dim small pdf-link", href: "{base}{inv.pdf_url}", target: "_blank", onclick: move |e: dioxus::prelude::MouseEvent| e.stop_propagation(), "PDF" }
+            }
+        }
+    }
+}
+
+#[component]
+fn BillingDetail(
+    billing: pos_api::schema::BillingResponse,
+    base: String,
+    charge: Signal<Option<Charge>>,
+    now: Signal<i64>,
+) -> Element {
+    let mut modal = use_modal();
+    let dest = billing.destination.clone();
+    let pdf_url = format!("{}{}", base.trim_end_matches('/'), billing.pdf_url);
+    let qr_pdf_url = pdf_url.clone();
+    let show = |v: rust_decimal::Decimal| format!("${}", v.round_dp(2).normalize());
+    rsx! {
+        div { class: "stack",
+            for line in billing.lines.iter() {
+                div { class: "list-row",
+                    div { class: "goods-col",
+                        span { class: "goods-name", "{line.name}" }
+                        span { class: "dim small", "{line.qty} x {show(line.price)}" }
+                    }
+                    div { class: "goods-col right",
+                        span { class: "goods-price", "{show(line.price * rust_decimal::Decimal::from(line.qty))}" }
+                    }
+                }
+            }
+            div { class: "stack pad",
+                p { class: "dim small", "Subtotal {show(billing.subtotal)} · VAT {billing.vat_rate.normalize()}% {show(billing.vat_amount)}" }
+                p { class: "dim small", "Pay with {chain_label(dest.chain)} · {truncate(&dest.address, TRUNCATE_ADDR)}" }
+                p { class: "dim small", "Margin {show(billing.total - billing.cost)}" }
+            }
+            button {
+                class: "btn ghost full",
+                onclick: move |_| {
+                    charge.set(Some(Charge {
+                        billing: billing.clone(),
+                        expires_at: now_ms() + QR_TTL_MS,
+                        pdf_url: qr_pdf_url.clone(),
+                    }));
+                    modal.set_title(BILLING_TITLE);
+                    modal.set_content(rsx! { QrModalContent { charge, now } });
+                    modal.open();
+                },
+                "Show QR"
+            }
+            a { class: "btn ghost full pdf-link", href: "{pdf_url}", target: "_blank", "Download PDF" }
+        }
+    }
+}
+
+#[component]
 fn MethodSelect(
     shop_id: Uuid,
     base: String,
     token: String,
-    goods_ids: Vec<Uuid>,
+    items: Vec<pos_api::schema::CheckoutItem>,
     destinations: Vec<pos_api::schema::DestinationResponse>,
     total: rust_decimal::Decimal,
     currency: pos_api::schema::Currency,
     fx: rust_decimal::Decimal,
-    selected_goods: Signal<Vec<Uuid>>,
+    selected_goods: Signal<Vec<CartItem>>,
     goods: Signal<Vec<pos_api::schema::GoodsResponse>>,
     charge: Signal<Option<Charge>>,
     now: Signal<i64>,
@@ -1813,7 +2150,7 @@ fn MethodSelect(
                         let addr = d.address.clone();
                         let tile_base = base.clone();
                         let tile_token = token.clone();
-                        let tile_goods_ids = goods_ids.clone();
+                        let tile_items = items.clone();
                         let is_bank = chain == pos_api::schema::Chain::Bank;
                         let amount = if is_bank {
                             format!("\u{0e3f}{bank_amount}")
@@ -1833,7 +2170,7 @@ fn MethodSelect(
                                             shop_id,
                                             base: tile_base.clone(),
                                             token: tile_token.clone(),
-                                            goods_ids: tile_goods_ids.clone(),
+                                            goods_items: tile_items.clone(),
                                             destination_id: dest_id,
                                             selected_goods,
                                             goods,
@@ -1860,9 +2197,9 @@ fn CheckoutContent(
     shop_id: Uuid,
     base: String,
     token: String,
-    goods_ids: Vec<Uuid>,
+    goods_items: Vec<pos_api::schema::CheckoutItem>,
     destination_id: Uuid,
-    selected_goods: Signal<Vec<Uuid>>,
+    selected_goods: Signal<Vec<CartItem>>,
     goods: Signal<Vec<pos_api::schema::GoodsResponse>>,
     charge: Signal<Option<Charge>>,
     now: Signal<i64>,
@@ -1874,7 +2211,7 @@ fn CheckoutContent(
         let mut toast = toast.clone();
         let base = base.clone();
         let token = token.clone();
-        let goods_ids = goods_ids.clone();
+        let goods_items = goods_items.clone();
         async move {
             let client = FetchClient {
                 base_url: base.clone(),
@@ -1884,7 +2221,8 @@ fn CheckoutContent(
                     &token,
                     &CheckoutRequest {
                         shop_id,
-                        goods_ids,
+                        goods_ids: Vec::new(),
+                        items: goods_items.clone(),
                         destination_id,
                     },
                 )
@@ -2013,6 +2351,33 @@ fn wallet_label(busy: Signal<bool>, name: &str) -> String {
 fn copy_text(s: &str) {
     if let Some(nav) = web_sys::window().map(|w| w.navigator()) {
         let _ = nav.clipboard().write_text(s);
+    }
+}
+
+fn query_param(key: &str) -> Option<String> {
+    let search = web_sys::window()?.location().search().ok()?;
+    let query = search.strip_prefix('?').unwrap_or(&search);
+    query.split('&').find_map(|pair| {
+        let (k, v) = pair.split_once('=')?;
+        (k == key).then(|| v.to_string())
+    })
+}
+
+fn push_query_param(key: &str, value: &str) {
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    let search = window.location().search().unwrap_or_default();
+    let query = search.strip_prefix('?').unwrap_or(&search);
+    let mut pairs: Vec<String> = query
+        .split('&')
+        .filter(|p| !p.is_empty() && p.split_once('=').map(|(k, _)| k != key).unwrap_or(true))
+        .map(str::to_string)
+        .collect();
+    pairs.push(format!("{key}={value}"));
+    let url = format!("?{}", pairs.join("&"));
+    if let Ok(history) = window.history() {
+        let _ = history.replace_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(&url));
     }
 }
 
@@ -2462,6 +2827,30 @@ fn parse_i64(s: &str) -> Option<i64> {
     t.parse().ok()
 }
 
+fn name_matches(goods: &[pos_api::schema::GoodsResponse], query: &str) -> Vec<Uuid> {
+    let q = query.to_lowercase();
+    goods
+        .iter()
+        .filter(|g| g.name.to_lowercase().contains(&q))
+        .map(|g| g.goods_id)
+        .collect()
+}
+
+fn search_filtered(
+    goods: &[pos_api::schema::GoodsResponse],
+    query: &str,
+) -> Vec<pos_api::schema::GoodsResponse> {
+    if query.trim().is_empty() {
+        return goods.to_vec();
+    }
+    let ids = name_matches(goods, query);
+    goods
+        .iter()
+        .filter(|g| ids.contains(&g.goods_id))
+        .cloned()
+        .collect()
+}
+
 fn truncate(s: &str, n: usize) -> String {
     if s.len() <= n * 2 {
         return String::from(s);
@@ -2487,9 +2876,6 @@ fn dest_label(d: &pos_api::schema::DestinationResponse) -> String {
 fn chain_label(chain: pos_api::schema::Chain) -> &'static str {
     match chain {
         pos_api::schema::Chain::Solana => "Solana",
-        pos_api::schema::Chain::Eth => "Ethereum",
-        pos_api::schema::Chain::Btc => "Bitcoin",
-        pos_api::schema::Chain::Binance => "Binance Pay",
         pos_api::schema::Chain::Bank => "PromptPay",
     }
 }
@@ -2532,12 +2918,6 @@ fn GoodsTab(token: String, base: String, shop_id: Uuid, is_admin: bool) -> Eleme
     let version = use_signal(|| 0u32);
     let toast = use_toast();
     let mut goods = use_signal(Vec::<pos_api::schema::GoodsResponse>::new);
-    let mut new_goods_name = use_signal(String::new);
-    let mut new_goods_price = use_signal(String::new);
-    let mut new_goods_cost = use_signal(String::new);
-    let mut new_goods_units = use_signal(String::new);
-    let mut new_goods_barcode = use_signal(String::new);
-
     let load_base = base.clone();
     let load_token = token.clone();
     let ver = version.read().to_owned();
@@ -2556,76 +2936,71 @@ fn GoodsTab(token: String, base: String, shop_id: Uuid, is_admin: bool) -> Eleme
 
     let create_base = base.clone();
     let create_token = token.clone();
+    let create_modal = modal.clone();
     let open_create = move |_| {
-        let mut modal = modal.clone();
-        new_goods_name.set(String::new());
-        new_goods_price.set(String::new());
-        new_goods_cost.set(String::new());
-        new_goods_units.set(String::new());
-        new_goods_barcode.set(String::new());
+        let mut modal = create_modal.clone();
         modal.set_title("Create goods");
         modal.set_content(rsx! {
             GoodsForm {
                 token: create_token.clone(),
                 base: create_base.clone(),
                 shop_id,
-                name: new_goods_name,
-                price: new_goods_price,
-                cost: new_goods_cost,
-                units: new_goods_units,
-                barcode: new_goods_barcode,
+                initial: None,
                 on_done: version,
             }
         });
         modal.open();
     };
 
+    let edit_token = token.clone();
+    let edit_base = base.clone();
+    let edit_modal = modal.clone();
+    let del_base = base.clone();
+    let del_token = token.clone();
+    let del_toast = toast.clone();
     rsx! {
-        div { class: "stack",
-            div { class: "row split",
-                h2 { class: "page-title", "Goods" }
-                button {
-                    class: "btn primary",
-                    "aria-label": "create-goods",
-                    onclick: open_create,
-                    "+ Create"
-                }
-            }
-            GoodsTable { goods }
-            if is_admin {
-                div { class: "card form",
-                    h3 { class: "doc-title", "{GOODS_MANAGE_TITLE}" }
-                    for g in goods().iter().cloned() {
-                        div { class: "row split",
-                            span { class: "small", "{g.name}" }
-                            button {
-                                class: "btn ghost",
-                                "aria-label": "delete-goods-{g.goods_id}",
-                                onclick: {
-                                    let base = base.clone();
-                                    let token = token.clone();
-                                    let toast = toast.clone();
-                                    move |_| {
-                                        let client = FetchClient { base_url: base.clone() };
-                                        let token = token.clone();
-                                        let mut toast = toast.clone();
-                                        let mut version = version;
-                                        let goods_id = g.goods_id;
-                                        spawn(async move {
-                                            match client.delete_goods(&token, shop_id, goods_id).await {
-                                                Ok(()) => version += 1,
-                                                Err(e) => notify(&mut toast, &e, true),
-                                            }
-                                        });
-                                    }
-                                },
-                                "{GOODS_DELETE_LABEL}"
-                            }
-                        }
-                    }
-                }
+    div { class: "stack",
+        div { class: "row split",
+            h2 { class: "page-title", "Goods" }
+            button {
+                class: "btn primary",
+                "aria-label": "create-goods",
+                onclick: open_create,
+                "+ Create"
             }
         }
+        GoodsTable {
+            goods,
+            is_admin,
+            on_edit: move |g: pos_api::schema::GoodsResponse| {
+                let mut modal = edit_modal.clone();
+                modal.set_title("Edit goods");
+                modal.set_content(rsx! {
+                    GoodsForm {
+                        token: edit_token.clone(),
+                        base: edit_base.clone(),
+                        shop_id,
+                        initial: Some(g),
+                        on_done: version,
+                    }
+                });
+                modal.open();
+            },
+            on_delete: move |g: pos_api::schema::GoodsResponse| {
+                let client = FetchClient { base_url: del_base.clone() };
+                let mut toast = del_toast.clone();
+                let mut version = version;
+                let goods_id = g.goods_id;
+                let token = del_token.clone();
+                spawn(async move {
+                    match client.delete_goods(&token, shop_id, goods_id).await {
+                        Ok(()) => version += 1,
+                        Err(e) => notify(&mut toast, &e, true),
+                    }
+                });
+            },
+        }
+    }
     }
 }
 
@@ -2679,7 +3054,12 @@ fn slice_rows(rows: Vec<GoodsRow>, start: usize, end: usize) -> (PropData<GoodsR
 }
 
 #[component]
-fn GoodsTable(goods: ReadSignal<Vec<pos_api::schema::GoodsResponse>>) -> Element {
+fn GoodsTable(
+    goods: ReadSignal<Vec<pos_api::schema::GoodsResponse>>,
+    is_admin: bool,
+    on_edit: EventHandler<pos_api::schema::GoodsResponse>,
+    on_delete: EventHandler<pos_api::schema::GoodsResponse>,
+) -> Element {
     let fetch = move |start: usize, end: usize, (sort_col, desc): (String, bool)| {
         let rows = derive_rows(&goods.read(), &sort_col, desc);
         Box::pin(async move { slice_rows(rows, start, end) })
@@ -2762,6 +3142,9 @@ fn GoodsTable(goods: ReadSignal<Vec<pos_api::schema::GoodsResponse>>) -> Element
                                 }
                             }
                         }
+                        if is_admin {
+                            th { class: "actions-head", "" }
+                        }
                     }
                 }
                 tbody {
@@ -2772,10 +3155,32 @@ fn GoodsTable(goods: ReadSignal<Vec<pos_api::schema::GoodsResponse>>) -> Element
                                     {cell(&row, &col.index)}
                                 }
                             }
+                            if is_admin {
+                                td { class: "actions-cell",
+                                    button {
+                                        class: "btn ghost tiny",
+                                        "aria-label": format!("edit-goods-{}", row.0.goods_id),
+                                        onclick: {
+                                            let g = row.0.clone();
+                                            move |_| on_edit.call(g.clone())
+                                        },
+                                        "{GOODS_EDIT_LABEL}"
+                                    }
+                                    button {
+                                        class: "btn ghost tiny danger",
+                                        "aria-label": format!("delete-goods-{}", row.0.goods_id),
+                                        onclick: {
+                                            let g = row.0.clone();
+                                            move |_| on_delete.call(g.clone())
+                                        },
+                                        "{GOODS_DELETE_LABEL}"
+                                    }
+                                }
+                            }
                         }
                     }
                     if table.get_rows().is_empty() {
-                        tr { td { class: "empty", colspan: "{GOODS_COLS.len()}", "no goods yet" } }
+                        tr { td { class: "empty", colspan: "{GOODS_COLS.len() + usize::from(is_admin)}", "no goods yet" } }
                     }
                 }
             }
@@ -2840,18 +3245,51 @@ fn GoodsForm(
     token: String,
     base: String,
     shop_id: Uuid,
-    name: Signal<String>,
-    price: Signal<String>,
-    cost: Signal<String>,
-    units: Signal<String>,
-    barcode: Signal<String>,
+    initial: Option<pos_api::schema::GoodsResponse>,
     on_done: Signal<u32>,
 ) -> Element {
     let modal = use_modal();
     let toast = use_toast();
-    let mut icon = use_signal(|| String::from(DEFAULT_ICON_KEY));
-    let mut color = use_signal(|| String::from(DEFAULT_COLOR_KEY));
-    let mut goods_type = use_signal(|| String::from(DEFAULT_GOODS_TYPE));
+    let empty = String::new();
+    let (
+        init_name,
+        init_price,
+        init_cost,
+        init_units,
+        init_barcode,
+        init_icon,
+        init_color,
+        init_type,
+    ) = match &initial {
+        Some(g) => (
+            g.name.clone(),
+            g.price.normalize().to_string(),
+            g.cost.normalize().to_string(),
+            g.units.to_string(),
+            g.barcode.clone().unwrap_or_default(),
+            g.icon.clone(),
+            g.color.clone(),
+            g.goods_type.clone(),
+        ),
+        None => (
+            empty.clone(),
+            empty.clone(),
+            empty.clone(),
+            String::from("0"),
+            empty,
+            String::from(DEFAULT_ICON_KEY),
+            String::from(DEFAULT_COLOR_KEY),
+            String::from(DEFAULT_GOODS_TYPE),
+        ),
+    };
+    let mut name = use_signal(move || init_name.clone());
+    let mut price = use_signal(move || init_price.clone());
+    let mut cost = use_signal(move || init_cost.clone());
+    let mut units = use_signal(move || init_units.clone());
+    let mut barcode = use_signal(move || init_barcode.clone());
+    let mut icon = use_signal(move || init_icon.clone());
+    let mut color = use_signal(move || init_color.clone());
+    let mut goods_type = use_signal(move || init_type.clone());
     let mut barcode_format = use_signal(|| String::from(BARCODE_FMT_AUTO));
     let mut camera_on = use_signal(|| false);
     let busy = use_signal(|| false);
@@ -3031,29 +3469,72 @@ fn GoodsForm(
                         return;
                     };
                     let client = FetchClient { base_url: base.clone() };
-                    let req = AddGoodsRequest {
-                        shop_id,
-                        name: goods_name,
-                        price: price_v,
-                        cost: cost_v,
-                        units: units_v,
-                        barcode: {
+                    let common = (
+                        goods_name,
+                        price_v,
+                        cost_v,
+                        units_v,
+                        {
                             let b = barcode().trim().to_string();
                             if b.is_empty() { None } else { Some(b) }
                         },
-                        icon: icon().clone(),
-                        color: color().clone(),
-                        goods_type: goods_type().clone(),
-                    };
+                        icon().clone(),
+                        color().clone(),
+                        goods_type().clone(),
+                    );
                     let token = token.clone();
                     let mut toast = toast.clone();
                     let mut modal = modal.clone();
                     let mut busy = busy;
+                    let initial = initial.clone();
                     spawn(async move {
                         busy.set(true);
-                        match client.add_goods(&token, &req).await {
-                            Ok(_) => {
-                                toast.success("goods created");
+                        let (goods_name, price_v, cost_v, units_v, barcode, icon, color, goods_type) =
+                            common;
+                        let res = match &initial {
+                            Some(g) => {
+                                client
+                                    .update_goods(
+                                        &token,
+                                        shop_id,
+                                        g.goods_id,
+                                        &UpdateGoodsRequest {
+                                            name: goods_name,
+                                            price: price_v,
+                                            cost: cost_v,
+                                            units: units_v,
+                                            barcode,
+                                            icon,
+                                            color,
+                                            goods_type,
+                                        },
+                                    )
+                                    .await
+                                    .map(|_| ())
+                            }
+                            None => {
+                                client
+                                    .add_goods(
+                                        &token,
+                                        &AddGoodsRequest {
+                                            shop_id,
+                                            name: goods_name,
+                                            price: price_v,
+                                            cost: cost_v,
+                                            units: units_v,
+                                            barcode,
+                                            icon,
+                                            color,
+                                            goods_type,
+                                        },
+                                    )
+                                    .await
+                                    .map(|_| ())
+                            }
+                        };
+                        match res {
+                            Ok(()) => {
+                                toast.success(if initial.is_some() { "goods updated" } else { "goods created" });
                                 on_done.with_mut(|v| *v = v.wrapping_add(1));
                                 modal.close();
                             }
@@ -3062,10 +3543,41 @@ fn GoodsForm(
                         busy.set(false);
                     });
                 },
-                if busy() { "…" } else { "Add goods" }
+                if busy() { "…" } else if initial.is_some() { "Save changes" } else { "Add goods" }
             }
         }
     }
+}
+
+struct PaymentSettings {
+    shop_id: Uuid,
+    mode: VatMode,
+    vat_rate: String,
+    fx_input: String,
+    cur: Currency,
+}
+
+fn save_settings(token: String, base: String, toast: UseToast, s: PaymentSettings) {
+    spawn(async move {
+        let mut toast = toast;
+        let client = FetchClient { base_url: base };
+        let req = UpdateShopSettingsRequest {
+            vat_mode: s.mode,
+            vat_rate: s
+                .vat_rate
+                .parse::<rust_decimal::Decimal>()
+                .unwrap_or(rust_decimal::Decimal::ZERO),
+            fx_thb_per_usd: s
+                .fx_input
+                .parse::<rust_decimal::Decimal>()
+                .unwrap_or(rust_decimal::Decimal::ZERO),
+            currency: s.cur,
+        };
+        match client.update_shop_settings(&token, s.shop_id, &req).await {
+            Ok(_) => notify(&mut toast, "Payment settings saved", false),
+            Err(e) => notify(&mut toast, &e, true),
+        }
+    });
 }
 
 #[component]
@@ -3158,7 +3670,18 @@ fn SettingsTab(token: String, base: String, shop_id: Uuid, is_admin: bool) -> El
                         },
                         SettingsSection::Receive => rsx! {
                             div { class: "card form",
-                                h3 { class: "doc-title", "Receive accounts" }
+                                div { class: "row split",
+                                    h3 { class: "doc-title", "Receive accounts" }
+                                    if is_admin {
+                                        button {
+                                            class: "btn-circle",
+                                            "aria-label": "add-account",
+                                            title: "Add receive account",
+                                            onclick: move |_| section.set(SettingsSection::AddAccount),
+                                            "+"
+                                        }
+                                    }
+                                }
                                 div { class: "list",
                                     for d in destinations().iter().cloned() {
                                         div { class: "list-row",
@@ -3167,10 +3690,39 @@ fn SettingsTab(token: String, base: String, shop_id: Uuid, is_admin: bool) -> El
                                                 span { class: "mono dim small", "{truncate(&d.address, 10)}" }
                                             }
                                             span { class: "chip", "receives here" }
+                                            if is_admin {
+                                                button {
+                                                    class: "btn ghost tiny danger",
+                                                    "aria-label": "delete-destination-{d.destination_id}",
+                                                    onclick: {
+                                                        let base = base.clone();
+                                                        let token = token.clone();
+                                                        let mut destinations = destinations;
+                                                        let toast = toast.clone();
+                                                        move |_| {
+                                                            let client = FetchClient { base_url: base.clone() };
+                                                            let token = token.clone();
+                                                            let mut toast = toast.clone();
+                                                            let dest_id = d.destination_id;
+                                                            spawn(async move {
+                                                                match client.remove_destination(&token, shop_id, dest_id).await {
+                                                                    Ok(()) => {
+                                                                        if let Ok(list) = client.list_destinations(&token, shop_id).await {
+                                                                            destinations.set(list);
+                                                                        }
+                                                                    }
+                                                                    Err(e) => notify(&mut toast, &e, true),
+                                                                }
+                                                            });
+                                                        }
+                                                    },
+                                                    "{DEST_DELETE_LABEL}"
+                                                }
+                                            }
                                         }
                                     }
                                     if destinations().is_empty() {
-                                        p { class: "dim pad", "no receive accounts yet — add one under Add account" }
+                                        p { class: "dim pad", "no receive accounts yet — tap + to add one" }
                                     }
                                 }
                             }
@@ -3224,17 +3776,11 @@ fn SettingsTab(token: String, base: String, shop_id: Uuid, is_admin: bool) -> El
                                     value: "{dest_chain:?}",
                                     onchange: move |e| {
                                         dest_chain.set(match e.value().as_str() {
-                                            "Eth" => Chain::Eth,
-                                            "Btc" => Chain::Btc,
-                                            "Binance" => Chain::Binance,
                                             "Bank" => Chain::Bank,
                                             _ => Chain::Solana,
                                         });
                                     },
                                     option { value: "Solana", "Solana (USDC / USDT)" }
-                                    option { value: "Eth", "Ethereum (ETH)" }
-                                    option { value: "Btc", "Bitcoin (BTC)" }
-                                    option { value: "Binance", "Binance Pay (BNB)" }
                                     option { value: "Bank", "PromptPay (Thai bank)" }
                                 }
                                 {(dest_chain() == Chain::Solana).then(|| {
@@ -3300,6 +3846,7 @@ fn SettingsTab(token: String, base: String, shop_id: Uuid, is_admin: bool) -> El
                         SettingsSection::Tax => rsx! {
                             div { class: "card form",
                                 h3 { class: "doc-title", "Tax / VAT" }
+                                label { class: "dim small", "VAT mode" }
                                 select {
                                     class: "field",
                                     "aria-label": "vat-mode",
@@ -3311,11 +3858,12 @@ fn SettingsTab(token: String, base: String, shop_id: Uuid, is_admin: bool) -> El
                                             _ => VatMode::None,
                                         });
                                     },
-                                    option { value: "None", "No VAT" }
-                                    option { value: "Exclusive", "Exclusive — added on top" }
-                                    option { value: "Inclusive", "Inclusive — included in price" }
+                                    option { value: "None", "No VAT — don't charge VAT" }
+                                    option { value: "Exclusive", "Exclusive — add VAT on top of prices" }
+                                    option { value: "Inclusive", "Inclusive — prices already include VAT" }
                                 }
                                 if vat_mode() != VatMode::None {
+                                    label { class: "dim small", "VAT rate (%)" }
                                     input {
                                         class: "field",
                                         "aria-label": "vat-rate",
@@ -3324,13 +3872,19 @@ fn SettingsTab(token: String, base: String, shop_id: Uuid, is_admin: bool) -> El
                                         oninput: move |e| vat_rate.set(e.value()),
                                     }
                                 }
-                                input {
-                                    class: "field",
-                                    "aria-label": "fx-thb-per-usd",
-                                    placeholder: "THB per $1 (swap rate, 0 = off)",
-                                    value: "{fx_input}",
-                                    oninput: move |e| fx_input.set(e.value()),
+                                button {
+                                    class: "btn primary full",
+                                    "aria-label": "save-vat",
+                                    onclick: move |_| save_settings(token.clone(), base.clone(), toast.clone(), PaymentSettings { shop_id, mode: vat_mode(), vat_rate: vat_rate(), fx_input: fx_input(), cur: currency() }),
+                                    "Save VAT settings"
                                 }
+                                p { class: "dim small", "exclusive adds VAT on top of prices · inclusive extracts it — shown on every sale" }
+                            }
+                        },
+                        SettingsSection::Currency => rsx! {
+                            div { class: "card form",
+                                h3 { class: "doc-title", "Currency & FX" }
+                                label { class: "dim small", "Display currency" }
                                 select {
                                     class: "field",
                                     "aria-label": "currency",
@@ -3344,33 +3898,21 @@ fn SettingsTab(token: String, base: String, shop_id: Uuid, is_admin: bool) -> El
                                     option { value: "Usdt", "USD $ — USDC / USDT" }
                                     option { value: "Thb", "THB \u{0e3f} — Thai baht" }
                                 }
+                                label { class: "dim small", "THB per $1 (swap rate)" }
+                                input {
+                                    class: "field",
+                                    "aria-label": "fx-thb-per-usd",
+                                    placeholder: "THB per $1 (0 = off)",
+                                    value: "{fx_input}",
+                                    oninput: move |e| fx_input.set(e.value()),
+                                }
                                 button {
                                     class: "btn primary full",
-                                    "aria-label": "save-vat",
-                                    onclick: {
-                                        let base = base.clone();
-                                        let token = token.clone();
-                                        let toast = toast.clone();
-                                        move |_| {
-                                            let client = FetchClient { base_url: base.clone() };
-                                            let token = token.clone();
-                                            let mut toast = toast.clone();
-                                            let mode = vat_mode();
-                                            let rate = vat_rate().parse::<rust_decimal::Decimal>().unwrap_or(rust_decimal::Decimal::ZERO);
-                                            let fx = fx_input().parse::<rust_decimal::Decimal>().unwrap_or(rust_decimal::Decimal::ZERO);
-                                            let cur = currency();
-                                            spawn(async move {
-                                                let req = UpdateShopSettingsRequest { vat_mode: mode, vat_rate: rate, fx_thb_per_usd: fx, currency: cur };
-                                                match client.update_shop_settings(&token, shop_id, &req).await {
-                                                    Ok(_) => notify(&mut toast, "Payment settings saved", false),
-                                                    Err(e) => notify(&mut toast, &e, true),
-                                                }
-                                            });
-                                        }
-                                    },
-                                    "Save"
+                                    "aria-label": "save-currency",
+                                    onclick: move |_| save_settings(token.clone(), base.clone(), toast.clone(), PaymentSettings { shop_id, mode: vat_mode(), vat_rate: vat_rate(), fx_input: fx_input(), cur: currency() }),
+                                    "Save currency settings"
                                 }
-                                p { class: "dim small", "exclusive adds VAT on top of prices · inclusive extracts it — shown on every sale" }
+                                p { class: "dim small", "prices are charged in this currency · FX rate converts $ prices to THB · 0 disables conversion" }
                             }
                         },
                     }
@@ -3508,6 +4050,11 @@ button:focus-visible { outline: 2px solid #ffab73; outline-offset: 1px; }
 .btn.primary:not(:disabled):active { transform: translateY(2px); box-shadow: 0 2px 0 #b05a3c; }
 .btn.ghost { background: transparent; border: 2px solid #ff9eb5; color: #ffb3c6; }
 .btn.ghost.plan { flex: 1; }
+.btn.tiny { padding: 6px 12px; font-size: 12px; border-radius: 10px; border-width: 1px; }
+.btn.ghost.danger { border-color: #ff8fa3; color: #ff8fa3; }
+.actions-cell { display: flex; gap: 6px; justify-content: flex-end; white-space: nowrap; }
+.actions-head { width: 1%; }
+.list-row .chip { flex: none; white-space: nowrap; }
 .btn.ghost.plan.active { background: rgba(255, 158, 181, 0.18); border-color: #ffab73; color: #ffab73; }
 .btn.full { width: 100%; }
 .icon-btn { background: transparent; border: none; color: #c9a8a0; cursor: pointer; padding: 6px; display: flex; align-items: center; }
@@ -3542,6 +4089,22 @@ button:focus-visible { outline: 2px solid #ffab73; outline-offset: 1px; }
 .goods-name { font-size: 14px; font-weight: 600; }
 .goods-price { color: #ffab73; font-weight: 700; font-size: 15px; }
 .goods-meta { display: flex; align-items: center; gap: 8px; width: 100%; justify-content: space-between; }
+.cart-list { gap: 6px; }
+.cart-card { background: #321e26; border: 1px solid #452a35; border-radius: 18px; padding: 12px 14px 6px; display: flex; flex-direction: column; }
+.cart-head { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+.cart-head .spacer { flex: 1; }
+.cart-clear { background: transparent; border: none; color: #ff8fa3; font-size: 12px; font-weight: 700; cursor: pointer; padding: 4px 8px; }
+.cart-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-top: 1px solid #3b2430; }
+.cart-row .goods-name { font-weight: 700; }
+.sell-stack { padding-bottom: 170px; }
+.sort-select { width: auto; min-width: 130px; max-width: 190px; border-radius: 999px; padding: 8px 14px; }
+.cart-qty { gap: 6px; align-items: center; }
+.qty-btn { width: 28px; height: 28px; border-radius: 999px; border: 1px solid #452a35; background: #321e26; color: #ffab73; font-size: 16px; font-weight: 700; cursor: pointer; }
+.qty-btn-lg { width: 52px; height: 52px; font-size: 26px; }
+.qty-edit { display: flex; align-items: center; justify-content: center; gap: 22px; padding: 12px 0 20px; }
+.qty-num-lg { font-size: 30px; font-weight: 800; min-width: 84px; text-align: center; }
+.qty-btn:hover { border-color: #ffab73; }
+.qty-num { min-width: 32px; text-align: center; font-weight: 700; }
 .unit-chip { background: #452a35; color: #c9a8a0; border-radius: 999px; padding: 2px 8px; font-size: 11px; font-weight: 700; }
 .goods-tile.picked .unit-chip { color: #ffab73; }
 
@@ -3575,9 +4138,13 @@ button:focus-visible { outline: 2px solid #ffab73; outline-offset: 1px; }
 @media (max-width: 560px) { .settings-split { grid-template-columns: 1fr; } .settings-nav { flex-direction: row; flex-wrap: wrap; } }
 
 .fab { position: fixed; bottom: 92px; right: 20px; width: 62px; height: 62px; border-radius: 50%; background: linear-gradient(145deg, #ffab73, #ff8c5f); color: #3a1d28; border: none; cursor: pointer; display: flex; align-items: center; justify-content: center; box-shadow: 0 6px 0 #b05a3c, 0 12px 24px rgba(0,0,0,0.4); z-index: 40; transition: transform 0.12s ease; }
+.btn-circle { flex: none; width: 34px; height: 34px; border-radius: 50%; border: 1px solid #ff9eb5; background: #452a35; color: #ffab73; font-size: 20px; line-height: 1; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+.btn-circle:active { transform: scale(0.94); }
 .fab:disabled { opacity: 0.4; cursor: default; }
 .fab:active { transform: scale(0.94); }
-.fab.hold { bottom: 166px; background: #452a35; color: #ffab73; border: 1px solid #ff9eb5; box-shadow: none; }
+.fab.hold { bottom: 240px; background: #452a35; color: #ffab73; border: 1px solid #ff9eb5; box-shadow: none; }
+.fab.cart { bottom: 166px; background: #452a35; color: #ffab73; border: 1px solid #ff9eb5; box-shadow: none; }
+.fab-badge { position: absolute; top: -4px; right: -2px; background: #ff8c5f; color: #3a1d28; border-radius: 999px; min-width: 22px; height: 22px; padding: 0 6px; font-size: 12px; font-weight: 800; display: flex; align-items: center; justify-content: center; }
 .dest-chip.held-chip { color: #ffab73; border-color: #ff9eb5; }
 
 .pay { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 24px; }
@@ -3592,6 +4159,8 @@ button:focus-visible { outline: 2px solid #ffab73; outline-offset: 1px; }
 
 .list { display: flex; flex-direction: column; gap: 8px; }
 .list-row { display: flex; align-items: center; justify-content: space-between; background: #321e26; border: 1px solid #452a35; border-radius: 16px; padding: 12px 14px; font-size: 14px; }
+.list-row.clickable { cursor: pointer; }
+.list-row.clickable:hover { border-color: #ffab73; }
 .chip { background: #4d2b3a; color: #ffb3c6; border-radius: 999px; padding: 3px 10px; font-size: 11px; text-transform: uppercase; font-weight: 700; }
 .chain { font-weight: 700; font-size: 12px; color: #cdb4f6; }
 .field.price { max-width: 90px; }

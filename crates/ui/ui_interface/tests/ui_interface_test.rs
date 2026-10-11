@@ -92,8 +92,9 @@ impl ApiClient for Scripted {
             name: req.name.clone(),
             vat_mode: VatMode::None,
             vat_rate: rust_decimal::Decimal::ZERO,
-            fx_thb_per_usd: rust_decimal::Decimal::ZERO,
+            fx_thb_per_usd: rust_decimal::Decimal::from(33),
             currency: Default::default(),
+            your_role: Role::Owner,
         })
     }
     async fn list_shops(&self, _token: &str) -> Result<Vec<ShopResponse>, String> {
@@ -156,6 +157,18 @@ impl ApiClient for Scripted {
             v.push(g.clone());
         }
         Ok(g)
+    }
+    async fn update_goods(
+        &self,
+        _t: &str,
+        _s: Uuid,
+        _g: Uuid,
+        _req: &pos_api::schema::UpdateGoodsRequest,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+    async fn remove_destination(&self, _t: &str, _s: Uuid, _d: Uuid) -> Result<(), String> {
+        Ok(())
     }
     async fn list_goods(&self, _t: &str, _s: Uuid) -> Result<Vec<GoodsResponse>, String> {
         Ok(self.goods.lock().map(|v| v.clone()).unwrap_or_default())

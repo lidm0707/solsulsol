@@ -1,7 +1,7 @@
 //! PromptPay EMVCo QR payload per Thai BOT standard.
 
-use rust_decimal::Decimal;
 use crate::target;
+use rust_decimal::Decimal;
 
 pub const AID_PROMPTPAY: &str = "A000000677010111";
 pub const COUNTRY_CODE_TH: &str = "TH";

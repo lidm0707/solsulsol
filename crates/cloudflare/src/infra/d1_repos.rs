@@ -31,7 +31,7 @@ use worker::wasm_bindgen::JsValue;
 use worker::D1Database;
 
 pub const NIL: Uuid = Uuid::nil();
-const FALLBACK_BTC_ADDRESS: &str = "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa";
+const FALLBACK_ADDRESS: &str = "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa";
 
 pub type Db = Arc<D1Database>;
 
@@ -289,7 +289,7 @@ struct DestinationRow {
 }
 
 fn destination_row(r: DestinationRow) -> PaymentDestination {
-    let chain = Chain::parse(&r.chain).unwrap_or(Chain::Binance);
+    let chain = Chain::parse(&r.chain).unwrap_or(Chain::Solana);
     PaymentDestination {
         id: parse_uid(&r.id),
         shop_id: parse_uid(&r.shop_id),
@@ -631,6 +631,28 @@ impl GoodsRepo for D1GoodsRepo {
         .map(|r: Option<GoodsRow>| r.map(goods_row))
     }
 
+    async fn update(&self, goods: &Goods) -> Result<(), String> {
+        exec(
+            &self.db,
+            "UPDATE goods SET name = ?1, price = ?2, cost = ?3, units = ?4, barcode = ?5, icon = ?6, color = ?7, goods_type = ?8 WHERE id = ?9",
+            &[
+                js_text(&goods.name),
+                js_dec(goods.price.amount()),
+                js_dec(goods.cost),
+                js_i64(goods.units),
+                match &goods.barcode {
+                    Some(b) => js_text(b),
+                    None => JsValue::NULL,
+                },
+                js_text(goods.icon.as_str()),
+                js_text(goods.color.as_str()),
+                js_text(goods.goods_type.as_str()),
+                js_uid(goods.id),
+            ],
+        )
+        .await
+    }
+
     async fn delete(&self, goods_id: Uuid) -> Result<(), String> {
         exec(
             &self.db,
@@ -785,7 +807,7 @@ impl D1BillingRepo {
         )
         .await?
         else {
-            return ChainAddress::parse(Chain::Btc, FALLBACK_BTC_ADDRESS)
+            return ChainAddress::parse(Chain::Solana, FALLBACK_ADDRESS)
                 .map(|addr| PaymentDestination {
                     id: NIL,
                     shop_id: NIL,
@@ -794,7 +816,7 @@ impl D1BillingRepo {
                 })
                 .map_err(|_| String::from("const fallback address must parse"));
         };
-        let chain = Chain::parse(&r.chain).unwrap_or(Chain::Binance);
+        let chain = Chain::parse(&r.chain).unwrap_or(Chain::Solana);
         Ok(PaymentDestination {
             id: parse_uid(&r.id),
             shop_id: NIL,

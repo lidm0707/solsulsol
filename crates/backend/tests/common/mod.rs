@@ -307,6 +307,14 @@ impl GoodsRepo for MemGoods {
             .find(|p| p.id == goods_id)
             .cloned())
     }
+    async fn update(&self, p: &Goods) -> Result<(), String> {
+        let mut rows = self.rows.lock().expect("lock");
+        if let Some(slot) = rows.iter_mut().find(|r| r.id == p.id) {
+            *slot = p.clone();
+            return Ok(());
+        }
+        Err("goods not found".into())
+    }
     async fn delete(&self, goods_id: Uuid) -> Result<(), String> {
         self.rows.lock().expect("lock").retain(|p| p.id != goods_id);
         Ok(())
