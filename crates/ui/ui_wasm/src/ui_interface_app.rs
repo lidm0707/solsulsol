@@ -147,7 +147,6 @@ const ICON_REPORTS: &str = "M4 20V10m6 10V4m6 16v-7m4 7H2";
 const ICON_SETTINGS: &str = "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm7.4-3a7.4 7.4 0 0 0-.1-1.2l2-1.5-2-3.5-2.4 1a7.4 7.4 0 0 0-2-1.2L14.5 3h-5l-.4 2.6a7.4 7.4 0 0 0-2 1.2l-2.4-1-2 3.5 2 1.5a7.4 7.4 0 0 0 0 2.4l-2 1.5 2 3.5 2.4-1a7.4 7.4 0 0 0 2 1.2l.4 2.6h5l.4-2.6a7.4 7.4 0 0 0 2-1.2l2.4 1 2-3.5-2-1.5c.1-.4.1-.8.1-1.2Z";
 const ICON_LOGOUT: &str = "M15 4h4v16h-4M11 8l4 4-4 4m4-4H3";
 const ICON_ADD: &str = "M12 5v14M5 12h14";
-const ICON_QTY: &str = "M4 7h9m4 0h3M4 17h3m4 0h9M15 4.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5ZM9 14.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5Z";
 const ICON_CART: &str =
     "M4 5h2l2.2 11h10.3l2-8H7M10 20a1 1 0 1 0 0-2 1 1 0 0 0 0 2Zm8 0a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z";
 
@@ -477,7 +476,6 @@ const CART_TITLE: &str = "Cart";
 const CART_CLEAR_LABEL: &str = "clear";
 const CART_ITEMS_WORD: &str = "items";
 const CART_EMPTY_MSG: &str = "cart is empty — tap goods to add";
-const QTY_DONE_LABEL: &str = "done";
 const SEARCH_NO_MATCH_MSG: &str = "no matching goods: ";
 const SEARCH_MULTI_MATCH_MSG: &str = "multiple goods match, type more: ";
 const UNKNOWN_BARCODE_PREFIX: &str = "unknown barcode: ";
@@ -1891,7 +1889,6 @@ fn CartRow(
     goods: Signal<Vec<pos_api::schema::GoodsResponse>>,
     sym: &'static str,
 ) -> Element {
-    let modal = use_modal();
     let goods_item = goods()
         .iter()
         .find(|g| g.goods_id == item.goods_id)
@@ -1902,74 +1899,42 @@ fn CartRow(
         .unwrap_or_default();
     let price = goods_item.map(|g| g.price).unwrap_or_default();
     let line = price * rust_decimal::Decimal::from(item.qty);
-    let row_modal = modal.clone();
-    let row_name = name.clone();
-    rsx! {
-        div { class: "row split cart-row",
-            span { class: "goods-name", "{name} "
-                span { class: "dim small", "x{item.qty}" }
-            }
-            span { class: "row cart-qty",
-                span { class: "goods-price", "{sym} {line.normalize()}" }
-                button {
-                    class: "btn-circle",
-                    "aria-label": "edit-qty",
-                    onclick: move |_| {
-                        let mut modal = row_modal.clone();
-                        modal.set_title(row_name.as_str());
-                        modal.set_content(rsx! {
-                            QtyEdit { goods_id: item.goods_id, selected_goods }
-                        });
-                        modal.open();
-                    },
-                    Icon { path: ICON_QTY, size: 18 }
-                }
-            }
-        }
-    }
-}
-
-#[component]
-fn QtyEdit(goods_id: Uuid, selected_goods: Signal<Vec<CartItem>>) -> Element {
-    let mut modal = use_modal();
-    let mut qty = use_signal(|| {
-        selected_goods()
-            .iter()
-            .find(|c| c.goods_id == goods_id)
-            .map(|c| c.qty)
-            .unwrap_or(CART_QTY_STEP)
-    });
-    let save = move |_| {
+    let dec = {
         let mut cur = selected_goods().clone();
-        if let Some(item) = cur.iter_mut().find(|c| c.goods_id == goods_id) {
-            item.qty = qty();
+        if let Some(pos) = cur.iter().position(|c| c.goods_id == item.goods_id) {
+            if cur[pos].qty <= CART_QTY_STEP {
+                cur.remove(pos);
+            } else {
+                cur[pos].qty -= CART_QTY_STEP;
+            }
         }
-        selected_goods.set(cur);
-        modal.close();
+        cur
+    };
+    let inc = {
+        let mut cur = selected_goods().clone();
+        if let Some(pos) = cur.iter().position(|c| c.goods_id == item.goods_id) {
+            cur[pos].qty += CART_QTY_STEP;
+        }
+        cur
     };
     rsx! {
-        div { class: "stack",
-            div { class: "qty-edit",
+        div { class: "row split cart-row",
+            span { class: "goods-name", "{name}" }
+            span { class: "row cart-qty",
                 button {
-                    class: "qty-btn qty-btn-lg",
+                    class: "qty-btn",
                     "aria-label": "qty-dec",
-                    disabled: "{qty() <= CART_QTY_STEP}",
-                    onclick: move |_| qty.set((qty()).saturating_sub(CART_QTY_STEP)),
+                    onclick: move |_| selected_goods.set(dec.clone()),
                     "−"
                 }
-                span { class: "qty-num qty-num-lg", "x{qty}" }
+                span { class: "qty-num", "x{item.qty}" }
                 button {
-                    class: "qty-btn qty-btn-lg",
+                    class: "qty-btn",
                     "aria-label": "qty-inc",
-                    onclick: move |_| qty.set(qty() + CART_QTY_STEP),
+                    onclick: move |_| selected_goods.set(inc.clone()),
                     "+"
                 }
-            }
-            button {
-                class: "btn primary full",
-                "aria-label": "qty-done",
-                onclick: save,
-                "{QTY_DONE_LABEL}"
+                span { class: "goods-price", "{sym} {line.normalize()}" }
             }
         }
     }
@@ -4100,9 +4065,6 @@ button:focus-visible { outline: 2px solid #ffab73; outline-offset: 1px; }
 .sort-select { width: auto; min-width: 130px; max-width: 190px; border-radius: 999px; padding: 8px 14px; }
 .cart-qty { gap: 6px; align-items: center; }
 .qty-btn { width: 28px; height: 28px; border-radius: 999px; border: 1px solid #452a35; background: #321e26; color: #ffab73; font-size: 16px; font-weight: 700; cursor: pointer; }
-.qty-btn-lg { width: 52px; height: 52px; font-size: 26px; }
-.qty-edit { display: flex; align-items: center; justify-content: center; gap: 22px; padding: 12px 0 20px; }
-.qty-num-lg { font-size: 30px; font-weight: 800; min-width: 84px; text-align: center; }
 .qty-btn:hover { border-color: #ffab73; }
 .qty-num { min-width: 32px; text-align: center; font-weight: 700; }
 .unit-chip { background: #452a35; color: #c9a8a0; border-radius: 999px; padding: 2px 8px; font-size: 11px; font-weight: 700; }
