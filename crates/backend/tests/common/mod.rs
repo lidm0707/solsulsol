@@ -1,5 +1,6 @@
 //! Shared in-memory fakes for backend tests (no DB, deterministic crypto).
-#![allow(clippy::todo, clippy::unimplemented)]
+//! Compiled once per test binary; not all binaries use every helper.
+#![allow(dead_code, clippy::todo, clippy::unimplemented)]
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
@@ -11,12 +12,12 @@ use pos_backend::domain::entities::subscription::{
     SubscriptionStatus,
 };
 use pos_backend::domain::entities::{
-    Goods, Invite, InviteStatus, Invoice, PaymentDestination, Shop, ShopMember, User,
+    Billing, Goods, Invite, InviteStatus, PaymentDestination, Shop, ShopMember, User,
 };
 use pos_backend::domain::value_objects::Role;
 // re-exports for sibling test specs; not crate API
 pub use pos_backend::port::database::{
-    DestinationRepo, GoodsRepo, InviteRepo, InvoiceRepo, NonceRepo, PaymentOrderRepo,
+    BillingRepo, DestinationRepo, GoodsRepo, InviteRepo, NonceRepo, PaymentOrderRepo,
     ShopMemberRepo, ShopRepo, StorageError, StorageUsageRepo, SubscriptionRepo, UserRepo,
 };
 pub use pos_backend::port::encryption::TokenIssuer;
@@ -206,7 +207,7 @@ impl ShopRepo for MemShops {
             .lock()
             .expect("lock")
             .iter()
-            .filter(|s| s.owner_id == user_id)
+            .filter(|s| s.owner_id == user_id && s.deleted_at.is_none())
             .cloned()
             .collect())
     }
@@ -297,6 +298,19 @@ impl GoodsRepo for MemGoods {
     async fn take_units(&self, _p: Uuid) -> Result<(), String> {
         unimplemented!("not exercised")
     }
+    async fn find_by_id(&self, goods_id: Uuid) -> Result<Option<Goods>, String> {
+        Ok(self
+            .rows
+            .lock()
+            .expect("lock")
+            .iter()
+            .find(|p| p.id == goods_id)
+            .cloned())
+    }
+    async fn delete(&self, goods_id: Uuid) -> Result<(), String> {
+        self.rows.lock().expect("lock").retain(|p| p.id != goods_id);
+        Ok(())
+    }
 }
 
 #[derive(Default)]
@@ -351,21 +365,32 @@ impl InviteRepo for MemInvites {
 }
 
 #[derive(Default)]
-pub struct MemInvoices;
+pub struct MemBillings;
 
 #[async_trait::async_trait]
-impl InvoiceRepo for MemInvoices {
-    async fn insert(&self, _i: &Invoice) -> Result<(), String> {
+impl BillingRepo for MemBillings {
+    async fn insert(&self, _i: &Billing) -> Result<(), String> {
         unimplemented!("not exercised")
     }
-    async fn find_by_id(&self, _id: Uuid) -> Result<Option<Invoice>, String> {
+    async fn find_by_id(&self, _id: Uuid) -> Result<Option<Billing>, String> {
         unimplemented!("not exercised")
     }
-    async fn list_by_shop(&self, _s: Uuid) -> Result<Vec<Invoice>, String> {
+    async fn list_by_shop(&self, _s: Uuid) -> Result<Vec<Billing>, String> {
         unimplemented!("not exercised")
     }
     async fn sales_by_goods(&self, _s: Uuid) -> Result<Vec<(Uuid, u64)>, String> {
         unimplemented!("not exercised")
+    }
+    async fn goods_has_lines(&self, _g: Uuid) -> Result<bool, String> {
+        Ok(false)
+    }
+    async fn hard_delete_expired(
+        &self,
+        _before: chrono::DateTime<chrono::Utc>,
+    ) -> Result<u64, String> {
+        // Mem billings are not cascade-linked to mem shops; the real
+        // billings-first purge is covered by purge_pg_test.
+        Ok(0)
     }
 }
 
@@ -470,7 +495,9 @@ impl SubscriptionRepo for MemSubs {
             .expect("lock")
             .iter()
             .filter(|s| {
-                s.status == SubscriptionStatus::Lapsed && s.grace_until.is_some_and(|g| g <= before)
+                s.status != SubscriptionStatus::Active
+                    && s.status != SubscriptionStatus::Grace
+                    && s.grace_until.is_some_and(|g| g <= before)
             })
             .cloned()
             .collect())
@@ -591,6 +618,27 @@ impl StorageUsageRepo for MemStorage {
             .map(|(_, b)| b)
             .sum())
     }
+
+    async fn list(&self, shop_id: Uuid) -> Result<Vec<(Uuid, i64)>, StorageError> {
+        let rows = self.rows.lock().expect("lock");
+        let mut items: Vec<(Uuid, i64)> = rows
+            .iter()
+            .filter(|((s, _), _)| *s == shop_id)
+            .map(|((_, k), b)| (*k, *b))
+            .collect();
+        items.sort_by_key(|(k, _)| *k);
+        Ok(items)
+    }
+
+    async fn remove(&self, shop_id: Uuid, key: Uuid) -> Result<i64, StorageError> {
+        let mut rows = self.rows.lock().expect("lock");
+        rows.remove(&(shop_id, key));
+        Ok(rows
+            .iter()
+            .filter(|((s, _), _)| *s == shop_id)
+            .map(|(_, b)| b)
+            .sum())
+    }
 }
 
 // ---- wiring ----
@@ -632,7 +680,7 @@ pub fn services(cfg: PaymentConfig) -> (AppServices, SvcWiring) {
         .goods(goods.clone())
         .destinations(Arc::new(MemDestinations))
         .invites(Arc::new(MemInvites::default()))
-        .invoices(Arc::new(MemInvoices))
+        .billings(Arc::new(MemBillings))
         .nonces(nonces.clone())
         .subscriptions(subs.clone())
         .orders(orders.clone())

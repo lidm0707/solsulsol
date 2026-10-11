@@ -1,7 +1,9 @@
-use crate::config::VoiceSettings;
+use crate::config::{VoiceCharacter, VoiceSettings};
 use crate::phoneme::{Phoneme, Vowel};
 
-const FORMANT_GAINS: [f32; 3] = [1.0, 0.5, 0.25];
+const FORMANT_GAINS: [f32; 4] = [1.0, 0.5, 0.25, 0.12];
+const NEUTRAL_F4_HZ: f32 = 3_600.0;
+const ANIME_F4_SCALE: f32 = 1.15;
 const VOWEL_BANDWIDTH: f32 = 90.0;
 const CONSONANT_BANDWIDTH: f32 = 600.0;
 const NASAL_BANDWIDTH: f32 = 150.0;
@@ -15,6 +17,13 @@ const NASAL_F1: f32 = 250.0;
 const NASAL_F2: f32 = 1_000.0;
 const LIQUID_F1: f32 = 400.0;
 const LIQUID_F2: f32 = 1_300.0;
+const OPEN_QUOTIENT: f32 = 0.6;
+const RISE_FRACTION: f32 = 0.7;
+// mean of glottal_pulse over one period; subtracted to avoid DC offset
+const PULSE_DC: f32 = OPEN_QUOTIENT * (2.0 - RISE_FRACTION) / 3.0;
+const JITTER_CENTS: f32 = 25.0;
+const JITTER_SMOOTH: f32 = 0.05;
+const SHIMMER: f32 = 0.06;
 
 #[derive(Clone, Copy, Default)]
 pub struct Resonator {
@@ -48,8 +57,9 @@ pub struct Synth {
     phase: f32,
     prev_freq: f32,
     rng: u32,
+    jitter_state: f32,
     tilt_state: f32,
-    vowel: [Resonator; 3],
+    vowel: [Resonator; 4],
     nasal: [Resonator; 2],
     liquid: [Resonator; 2],
     fricative: Resonator,
@@ -63,8 +73,9 @@ impl Synth {
             phase: 0.0,
             prev_freq: GLIDE_MIN_FREQ,
             rng: 0x9E37_79B9,
+            jitter_state: 0.0,
             tilt_state: 0.0,
-            vowel: [Resonator::default(); 3],
+            vowel: [Resonator::default(); 4],
             nasal: [Resonator::default(); 2],
             liquid: [Resonator::default(); 2],
             fricative: Resonator::default(),
@@ -75,16 +86,19 @@ impl Synth {
         let target = midi_freq(midi);
         let glide = (self.voice.portamento_seconds * self.sample_rate) as usize;
         let total = self.samples_for(duration);
-        let segments = split_segments(phonemes, total);
+        let segments = split_segments(phonemes, total, self.voice.character.consonant_weight());
         let mut out = vec![0.0; total];
 
-        for (phoneme, (start, len)) in segments {
-            for j in 0..len {
+        for (i, (phoneme, (start, len))) in segments.iter().enumerate() {
+            let head_s = glide_seconds(&segments, i.wrapping_sub(1));
+            let tail_s = glide_seconds(&segments, i + 1);
+            for j in 0..*len {
                 let n = start + j;
-                let freq = self.instantaneous_freq(target, glide.saturating_sub(start), j);
-                let progress = j as f32 / len as f32;
-                out[n] += self.sample(phoneme, freq, n, progress)
-                    * boundary_ramp(j, len, self.sample_rate);
+                let freq = self.instantaneous_freq(target, glide.saturating_sub(*start), j)
+                    * contour_scale(n as f32 / total as f32, self.voice.speech_contour_cents);
+                let progress = j as f32 / *len as f32;
+                out[n] += self.sample(*phoneme, freq, n, progress)
+                    * boundary_ramp(j, *len, self.sample_rate, head_s, tail_s);
             }
             self.prev_freq = target;
         }
@@ -134,7 +148,7 @@ impl Synth {
     }
 
     fn vowel_sample(&mut self, v: Vowel, voiced: f32) -> f32 {
-        let formants = [v.f1, v.f2, v.f3];
+        let formants = self.vowel_formants(v);
         let mut sum = self.voice.breathiness * self.noise();
         for (filter, (&f, gain)) in self
             .vowel
@@ -145,6 +159,17 @@ impl Synth {
             sum += gain * filter.step(voiced);
         }
         sum
+    }
+
+    fn vowel_formants(&self, v: Vowel) -> [f32; 4] {
+        let scale = self.voice.character.formant_scale();
+        let f4 = NEUTRAL_F4_HZ
+            * if self.voice.character == VoiceCharacter::AnimeGirl {
+                ANIME_F4_SCALE
+            } else {
+                1.0
+            };
+        [v.f1 * scale, v.f2 * scale, v.f3 * scale, f4]
     }
 
     fn stop_sample(&mut self, burst_hz: f32, progress: f32) -> f32 {
@@ -172,15 +197,17 @@ impl Synth {
     }
 
     fn voiced_source(&mut self, f0: f32) -> f32 {
-        let step = (f0 / self.sample_rate).min(0.5);
+        self.jitter_state += JITTER_SMOOTH * (self.noise() - self.jitter_state);
+        let jitter = 2.0_f32.powf(JITTER_CENTS * self.jitter_state / 1200.0);
+        let step = (f0 * jitter / self.sample_rate).min(0.5);
         self.phase = (self.phase + step) % 1.0;
-        let saw = 2.0 * self.phase - 1.0;
-        self.tilt(saw)
+        let shimmer = 1.0 + SHIMMER * self.noise();
+        let pulse = glottal_pulse(self.phase) - PULSE_DC;
+        self.tilt(pulse * shimmer)
     }
 
     fn tilt(&mut self, input: f32) -> f32 {
-        const CUTOFF_RATIO: f32 = 0.15;
-        let alpha = (std::f32::consts::TAU * CUTOFF_RATIO).min(1.0);
+        let alpha = (std::f32::consts::TAU * self.voice.character.tilt_cutoff_ratio()).min(1.0);
         self.tilt_state += alpha * (input - self.tilt_state);
         self.tilt_state
     }
@@ -214,18 +241,21 @@ fn band_sample(
 }
 
 const VOWEL_WEIGHT: f32 = 1.0;
-const CONSONANT_WEIGHT: f32 = 0.15;
 
 const BOUNDARY_RAMP_SECONDS: f32 = 0.005;
+const VOWEL_GLIDE_SECONDS: f32 = 0.035;
 
-fn boundary_ramp(j: usize, len: usize, sample_rate: f32) -> f32 {
-    let ramp = (BOUNDARY_RAMP_SECONDS * sample_rate) as usize;
-    let head = (j.min(ramp)) as f32 / ramp as f32;
-    let tail = ((len - j).min(ramp)) as f32 / ramp as f32;
+fn boundary_ramp(j: usize, len: usize, sample_rate: f32, head_s: f32, tail_s: f32) -> f32 {
+    let head = (j as f32 / (head_s * sample_rate)).min(1.0);
+    let tail = ((len - j) as f32 / (tail_s * sample_rate)).min(1.0);
     head.min(tail)
 }
 
-fn split_segments(phonemes: &[Phoneme], total: usize) -> Vec<(Phoneme, (usize, usize))> {
+fn split_segments(
+    phonemes: &[Phoneme],
+    total: usize,
+    consonant_weight: f32,
+) -> Vec<(Phoneme, (usize, usize))> {
     if phonemes.is_empty() {
         return vec![(Phoneme::Vowel(crate::phoneme::VOWEL_SCHWA), (0, total))];
     }
@@ -235,7 +265,7 @@ fn split_segments(phonemes: &[Phoneme], total: usize) -> Vec<(Phoneme, (usize, u
             if is_vowel(p) {
                 VOWEL_WEIGHT
             } else {
-                CONSONANT_WEIGHT
+                consonant_weight
             }
         })
         .collect();
@@ -260,6 +290,13 @@ fn split_segments(phonemes: &[Phoneme], total: usize) -> Vec<(Phoneme, (usize, u
         .collect()
 }
 
+fn glide_seconds(segments: &[(Phoneme, (usize, usize))], neighbor: usize) -> f32 {
+    match segments.get(neighbor) {
+        Some((p, _)) if is_vowel(p) => VOWEL_GLIDE_SECONDS,
+        _ => BOUNDARY_RAMP_SECONDS,
+    }
+}
+
 fn is_vowel(p: &Phoneme) -> bool {
     matches!(p, Phoneme::Vowel(_))
 }
@@ -279,6 +316,30 @@ fn apply_envelope(samples: &mut [f32], sample_rate: f32) {
     }
 }
 
+pub fn contour_cents_at(t: f32, depth_cents: f32) -> f32 {
+    depth_cents * (std::f32::consts::PI * t).sin() - depth_cents * t
+}
+
+fn contour_scale(t: f32, depth_cents: f32) -> f32 {
+    if depth_cents == 0.0 {
+        return 1.0;
+    }
+    2.0_f32.powf(contour_cents_at(t, depth_cents) / 1200.0)
+}
+
+fn glottal_pulse(phase: f32) -> f32 {
+    if phase >= OPEN_QUOTIENT {
+        return 0.0;
+    }
+    let rise_len = RISE_FRACTION * OPEN_QUOTIENT;
+    if phase < rise_len {
+        (phase / rise_len).powi(2)
+    } else {
+        let fall = (phase - rise_len) / (OPEN_QUOTIENT - rise_len);
+        1.0 - fall * fall
+    }
+}
+
 pub fn midi_freq(midi: u8) -> f32 {
     const A4_MIDI: f32 = 69.0;
     const A4_HZ: f32 = 440.0;
@@ -291,6 +352,18 @@ mod tests {
     use crate::phoneme::{g2p, VOWEL_A};
 
     const SR: u32 = 22_050;
+
+    #[test]
+    fn glottal_pulse_is_continuous_and_bounded() {
+        let at_open = glottal_pulse(OPEN_QUOTIENT - 1e-4);
+        let at_close = glottal_pulse(OPEN_QUOTIENT + 1e-4);
+        assert!((at_open - at_close).abs() < 0.01, "{at_open} vs {at_close}");
+        assert_eq!(glottal_pulse(0.0), 0.0);
+        assert!((glottal_pulse(OPEN_QUOTIENT * RISE_FRACTION) - 1.0).abs() < 1e-4);
+        for p in [0.0_f32, 0.3, 0.5, 0.7, 0.95] {
+            assert!((0.0..=1.0).contains(&glottal_pulse(p)));
+        }
+    }
 
     #[test]
     fn midi_freq_follows_equal_temperament() {
@@ -323,7 +396,7 @@ mod tests {
 
     #[test]
     fn segments_cover_whole_note() {
-        let segs = split_segments(&g2p("sing"), 1_000);
+        let segs = split_segments(&g2p("sing"), 1_000, 0.15);
         assert_eq!(segs.first().unwrap().1 .0, 0);
         let last = segs.last().unwrap();
         assert_eq!(last.1 .0 + last.1 .1, 1_000);
@@ -331,7 +404,7 @@ mod tests {
 
     #[test]
     fn vowels_dominate_note_duration() {
-        let segs = split_segments(&g2p("hello"), 44_100);
+        let segs = split_segments(&g2p("hello"), 44_100, 0.15);
         let vowel_samples: usize = segs
             .iter()
             .filter(|(p, _)| is_vowel(p))

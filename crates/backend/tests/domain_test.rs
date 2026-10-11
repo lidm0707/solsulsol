@@ -2,11 +2,11 @@ use rust_decimal::Decimal;
 use uuid::Uuid;
 
 use pos_backend::domain::entities::{
-    Currency, Invite, InviteStatus, Invoice, InvoiceLine, InvoiceStatus, Order, PaymentDestination,
+    Billing, BillingLine, BillingStatus, Currency, Invite, InviteStatus, Order, PaymentDestination,
     Shop, User, VatMode,
 };
 use pos_backend::domain::services::{
-    DomainRuleError, accept_invite, can_change_role, can_invite, invoice_can_transition,
+    DomainRuleError, accept_invite, billing_can_transition, can_change_role, can_invite,
     validate_order,
 };
 use pos_backend::domain::value_objects::{Chain, ChainAddress, Email, Money, Role, SplToken};
@@ -22,7 +22,7 @@ fn shop_with_vat() -> Shop {
         name: "test shop".to_owned(),
         vat_mode: VatMode::None,
         vat_rate: Decimal::ZERO,
-        fx_thb_per_sol: Decimal::ZERO,
+        fx_thb_per_usd: Decimal::ZERO,
         currency: Currency::default(),
         deleted_at: None,
     }
@@ -36,8 +36,8 @@ fn money(amount: i64) -> Money {
     Money::new(Decimal::from(amount)).expect("test amount is valid")
 }
 
-fn line(price: i64, qty: u32) -> InvoiceLine {
-    InvoiceLine {
+fn line(price: i64, qty: u32) -> BillingLine {
+    BillingLine {
         goods_id: Uuid::now_v7(),
         name: "widget".to_owned(),
         price: money(price),
@@ -69,18 +69,22 @@ impl pos_backend::port::promptpay::PromptPayEncoder for TestPromptPay {
 }
 
 #[test]
-pub fn pay_payload_encodes_spl_token_mint_for_non_sol() {
+pub fn pay_payload_encodes_spl_token_mint() {
     use rust_decimal::Decimal;
 
     let mut dest = sol_destination();
-    let sol = pos_backend::app::service::invoice::pay_payload(&TestPromptPay, &dest, Decimal::ONE);
-    assert!(!sol.contains("spl-token"), "{sol}");
-
-    dest.token = SplToken::Usdc;
-    let uri = pos_backend::app::service::invoice::pay_payload(&TestPromptPay, &dest, Decimal::ONE);
+    let uri = pos_backend::app::service::billing::pay_payload(&TestPromptPay, &dest, Decimal::ONE);
     assert_eq!(
         uri.split("spl-token=").nth(1),
         Some("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"),
+        "{uri}"
+    );
+
+    dest.token = SplToken::Usdt;
+    let uri = pos_backend::app::service::billing::pay_payload(&TestPromptPay, &dest, Decimal::ONE);
+    assert_eq!(
+        uri.split("spl-token=").nth(1),
+        Some("Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"),
         "{uri}"
     );
 }
@@ -162,21 +166,21 @@ fn invite_accepts_only_when_pending_unexpired_and_email_matches() {
 }
 
 #[test]
-fn invoice_total_sums_line_totals() {
-    let invoice = Invoice {
+fn billing_total_sums_line_totals() {
+    let billing = Billing {
         id: Uuid::now_v7(),
         shop_id: Uuid::now_v7(),
-        status: InvoiceStatus::Pending,
+        status: BillingStatus::Pending,
         lines: vec![line(10, 2), line(5, 1)],
         destination: sol_destination(),
         vat_mode: VatMode::None,
         vat_rate: Decimal::ZERO,
     };
-    assert_eq!(invoice.total(), Decimal::from(25));
+    assert_eq!(billing.total(), Decimal::from(25));
 }
 
 #[test]
-fn order_validates_and_converts_to_pending_invoice() {
+fn order_validates_and_converts_to_pending_billing() {
     let destination = sol_destination();
     let order = Order {
         id: Uuid::now_v7(),
@@ -187,9 +191,9 @@ fn order_validates_and_converts_to_pending_invoice() {
     };
     assert_eq!(validate_order(&order).ok(), Some(Decimal::from(9)));
 
-    let invoice = order.to_invoice(destination.clone(), &shop_with_vat());
-    assert_eq!(invoice.status, InvoiceStatus::Pending);
-    assert_eq!(invoice.destination.id, destination.id);
+    let billing = order.to_billing(destination.clone(), &shop_with_vat());
+    assert_eq!(billing.status, BillingStatus::Pending);
+    assert_eq!(billing.destination.id, destination.id);
 
     let empty = Order {
         lines: Vec::new(),
@@ -199,23 +203,23 @@ fn order_validates_and_converts_to_pending_invoice() {
 }
 
 #[test]
-fn invoice_transitions_only_from_pending() {
-    let base = Invoice {
+fn billing_transitions_only_from_pending() {
+    let base = Billing {
         id: Uuid::now_v7(),
         shop_id: Uuid::now_v7(),
-        status: InvoiceStatus::Pending,
+        status: BillingStatus::Pending,
         lines: vec![line(1, 1)],
         destination: sol_destination(),
         vat_mode: VatMode::None,
         vat_rate: Decimal::ZERO,
     };
-    assert!(invoice_can_transition(&base, InvoiceStatus::Paid));
-    assert!(invoice_can_transition(&base, InvoiceStatus::Cancelled));
-    let paid = Invoice {
-        status: InvoiceStatus::Paid,
+    assert!(billing_can_transition(&base, BillingStatus::Paid));
+    assert!(billing_can_transition(&base, BillingStatus::Cancelled));
+    let paid = Billing {
+        status: BillingStatus::Paid,
         ..base
     };
-    assert!(!invoice_can_transition(&paid, InvoiceStatus::Cancelled));
+    assert!(!billing_can_transition(&paid, BillingStatus::Cancelled));
 }
 
 #[test]

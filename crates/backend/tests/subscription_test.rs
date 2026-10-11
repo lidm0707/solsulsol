@@ -15,7 +15,7 @@ use pos_backend::app::service::subscription::{
     self, SubError, add_month, record_storage, renewal_base, require_active,
 };
 use pos_backend::domain::entities::subscription::{
-    MAX_GOODS_PER_SHOP, MAX_SHOPS_PER_USER, PaymentOrderStatus, SubscriptionStatus,
+    BillingPeriod, MAX_GOODS_PER_SHOP, MAX_SHOPS_PER_USER, PaymentOrderStatus, SubscriptionStatus,
 };
 use pos_backend::domain::value_objects::Role;
 use rust_decimal::Decimal;
@@ -116,7 +116,9 @@ async fn payment_wrong_amount_rejected() {
     let (svc, w) = services(bad_config());
     let uid = Uuid::now_v7();
     w.users.insert(&wallet_user(uid)).await.unwrap();
-    let order = subscription::create_order(&svc, uid).await.unwrap();
+    let order = subscription::create_order(&svc, uid, BillingPeriod::Monthly)
+        .await
+        .unwrap();
     w.verifier.set(FakeChain::WrongAmount);
     let err = subscription::verify_order(&svc, w.verifier.as_ref(), uid, order.id, "sig")
         .await
@@ -136,7 +138,9 @@ async fn payment_wrong_recipient_or_mint_or_failed_tx_rejected() {
     ] {
         let (svc, w) = services(bad_config());
         let uid = Uuid::now_v7();
-        let order = subscription::create_order(&svc, uid).await.unwrap();
+        let order = subscription::create_order(&svc, uid, BillingPeriod::Monthly)
+            .await
+            .unwrap();
         w.verifier.set(outcome);
         let err = subscription::verify_order(&svc, w.verifier.as_ref(), uid, order.id, "sig")
             .await
@@ -149,8 +153,12 @@ async fn payment_wrong_recipient_or_mint_or_failed_tx_rejected() {
 async fn duplicate_signature_cannot_double_credit() {
     let (svc, w) = services(bad_config());
     let uid = Uuid::now_v7();
-    let o1 = subscription::create_order(&svc, uid).await.unwrap();
-    let o2 = subscription::create_order(&svc, uid).await.unwrap();
+    let o1 = subscription::create_order(&svc, uid, BillingPeriod::Monthly)
+        .await
+        .unwrap();
+    let o2 = subscription::create_order(&svc, uid, BillingPeriod::Monthly)
+        .await
+        .unwrap();
     subscription::verify_order(&svc, w.verifier.as_ref(), uid, o1.id, "same-sig")
         .await
         .expect("first verify ok");
@@ -172,7 +180,9 @@ async fn order_owned_by_other_user_is_not_verifiable() {
     let owner = Uuid::now_v7();
     let attacker = Uuid::now_v7();
     w.users.insert(&wallet_user(owner)).await.unwrap();
-    let order = subscription::create_order(&svc, owner).await.unwrap();
+    let order = subscription::create_order(&svc, owner, BillingPeriod::Monthly)
+        .await
+        .unwrap();
     let err = subscription::verify_order(&svc, w.verifier.as_ref(), attacker, order.id, "sig")
         .await
         .expect_err("cross-user verify rejected");
@@ -184,14 +194,19 @@ async fn shop_creation_requires_subscription() {
     let (svc, w) = services(bad_config());
     let uid = Uuid::now_v7();
     w.users.insert(&wallet_user(uid)).await.unwrap();
+    // Creation is free; the subscription gate blocks usage inside the shop.
+    shop::create_shop(&svc, uid, "free")
+        .await
+        .expect("create without sub ok");
+    // Quota still applies without a subscription.
     assert!(matches!(
-        shop::create_shop(&svc, uid, "nope").await,
-        Err(ShopError::Subscription(SubError::NoSubscription))
+        shop::create_shop(&svc, uid, "two").await,
+        Err(ShopError::Subscription(SubError::QuotaShops))
     ));
     grant_active(&svc, uid).await;
     shop::create_shop(&svc, uid, "ok")
         .await
-        .expect("with sub ok");
+        .expect_err("quota already reached");
 }
 
 #[tokio::test]
@@ -233,7 +248,7 @@ async fn goods_quota_enforced() {
                 barcode: None,
                 icon: Default::default(),
                 color: Default::default(),
-            goods_type: Default::default(),
+                goods_type: Default::default(),
             })
             .await
             .unwrap();
@@ -252,7 +267,7 @@ async fn goods_quota_enforced() {
                 barcode: None,
                 icon: Default::default(),
                 color: Default::default(),
-            goods_type: Default::default(),
+                goods_type: Default::default(),
             },
         )
         .await,
@@ -289,6 +304,92 @@ async fn storage_quota_enforced_and_released() {
 }
 
 #[tokio::test]
+async fn storage_list_and_remove_free_quota() {
+    let (svc, _w) = services(bad_config());
+    let uid = Uuid::now_v7();
+    grant_active(&svc, uid).await;
+    let shop = shop::create_shop(&svc, uid, "s").await.unwrap();
+    let k1 = Uuid::now_v7();
+    let k2 = Uuid::now_v7();
+    record_storage(&svc, shop.id, k1, 100).await.unwrap();
+    record_storage(&svc, shop.id, k2, 50).await.unwrap();
+
+    let mut items = subscription::list_storage(&svc, shop.id).await.unwrap();
+    items.sort_by_key(|(k, _)| *k);
+    assert_eq!(items.len(), 2);
+    assert_eq!(items.iter().map(|(_, b)| *b).sum::<i64>(), 150);
+
+    let total = subscription::remove_storage(&svc, shop.id, k1)
+        .await
+        .unwrap();
+    assert_eq!(total, 50);
+    assert_eq!(
+        subscription::list_storage(&svc, shop.id).await.unwrap(),
+        vec![(k2, 50)]
+    );
+}
+
+#[tokio::test]
+async fn goods_delete_frees_quota_and_blocks_billingd() {
+    let (svc, w) = services(bad_config());
+    let uid = Uuid::now_v7();
+    grant_active(&svc, uid).await;
+    w.members
+        .insert(&pos_backend::domain::entities::ShopMember {
+            shop_id: SHOP_ID,
+            user_id: uid,
+            role: Role::Admin,
+        })
+        .await
+        .unwrap();
+    let goods = pos_backend::domain::entities::Goods {
+        id: Uuid::now_v7(),
+        shop_id: SHOP_ID,
+        name: "p".into(),
+        price: pos_backend::domain::value_objects::Money::one(),
+        cost: Decimal::ZERO,
+        units: 0,
+        barcode: None,
+        icon: Default::default(),
+        color: Default::default(),
+        goods_type: Default::default(),
+    };
+    w.goods.insert(&goods).await.unwrap();
+
+    pos_backend::app::service::goods::delete_goods(&svc, uid, SHOP_ID, goods.id)
+        .await
+        .expect("unreferenced goods deleted");
+    assert!(w.goods.find_by_id(goods.id).await.unwrap().is_none());
+
+    // Re-insert and simulate billing history via a referencing repo answer.
+    w.goods.insert(&goods).await.unwrap();
+    assert!(
+        !pos_backend::port::database::BillingRepo::goods_has_lines(&*svc.billings, goods.id)
+            .await
+            .unwrap()
+    );
+}
+
+#[tokio::test]
+async fn goods_delete_requires_admin() {
+    let (svc, w) = services(bad_config());
+    let uid = Uuid::now_v7();
+    grant_active(&svc, uid).await;
+    w.members
+        .insert(&pos_backend::domain::entities::ShopMember {
+            shop_id: SHOP_ID,
+            user_id: uid,
+            role: Role::Employee,
+        })
+        .await
+        .unwrap();
+    assert!(matches!(
+        pos_backend::app::service::goods::delete_goods(&svc, uid, SHOP_ID, Uuid::now_v7()).await,
+        Err(ShopError::Forbidden)
+    ));
+}
+
+#[tokio::test]
 async fn expired_subscription_blocks_actions_but_grace_keeps_data() {
     let (svc, w) = services(bad_config());
     let uid = Uuid::now_v7();
@@ -308,9 +409,10 @@ async fn expired_subscription_blocks_actions_but_grace_keeps_data() {
         require_active(&svc, uid).await,
         Err(SubError::Expired)
     ));
+    // Creation stays free while expired, but the shop quota still applies.
     assert!(matches!(
         shop::create_shop(&svc, uid, "new").await,
-        Err(ShopError::Subscription(SubError::Expired))
+        Err(ShopError::Subscription(SubError::QuotaShops))
     ));
     // Sweep: active+expired -> grace; data retained.
     let report = run_maintenance(&svc, &svc.payment_config, chrono::Utc::now())
@@ -318,6 +420,51 @@ async fn expired_subscription_blocks_actions_but_grace_keeps_data() {
         .unwrap();
     assert_eq!(report.marked_grace, 1);
     assert_eq!(w.shops.find_for_user(uid).await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn renewal_when_lapsed_reactivates_but_soft_deleted_data_stays_gone() {
+    let (svc, w) = services(bad_config());
+    let uid = Uuid::now_v7();
+    grant_active(&svc, uid).await;
+    shop::create_shop(&svc, uid, "locked-away").await.unwrap();
+
+    // Expire, sweep into grace, then past grace: shops are soft-deleted.
+    let mut sub = w.subs.find_by_user(uid).await.unwrap().unwrap();
+    sub.expires_at = chrono::Utc::now() - chrono::Duration::days(1);
+    w.subs.upsert(&sub).await.unwrap();
+    run_maintenance(&svc, &svc.payment_config, chrono::Utc::now())
+        .await
+        .unwrap();
+    let now = chrono::Utc::now() + chrono::Duration::days(31);
+    run_maintenance(&svc, &svc.payment_config, now)
+        .await
+        .unwrap();
+    assert!(
+        w.shops.find_for_user(uid).await.unwrap().is_empty(),
+        "locked: no live shops"
+    );
+    assert!(matches!(
+        require_active(&svc, uid).await,
+        Err(SubError::Expired)
+    ));
+
+    // Renewing while locked reactivates the subscription…
+    let order = subscription::create_order(&svc, uid, BillingPeriod::Monthly)
+        .await
+        .unwrap();
+    let renewed = subscription::verify_order(&svc, w.verifier.as_ref(), uid, order.id, "sig")
+        .await
+        .unwrap();
+    assert_eq!(renewed.status, SubscriptionStatus::Active);
+    assert!(renewed.expires_at > chrono::Utc::now());
+    require_active(&svc, uid).await.expect("active again");
+    // …but the soft-deleted shop stays deleted; the user starts fresh and can
+    // create a new shop under the renewed quota.
+    assert!(w.shops.find_for_user(uid).await.unwrap().is_empty());
+    shop::create_shop(&svc, uid, "fresh")
+        .await
+        .expect("create after reactivation");
 }
 
 #[tokio::test]
@@ -336,7 +483,9 @@ async fn renewal_within_grace_preserves_data() {
     assert_eq!(w.shops.find_for_user(uid).await.unwrap().len(), 1);
 
     // Renew via verified payment.
-    let order = subscription::create_order(&svc, uid).await.unwrap();
+    let order = subscription::create_order(&svc, uid, BillingPeriod::Monthly)
+        .await
+        .unwrap();
     let renewed = subscription::verify_order(&svc, w.verifier.as_ref(), uid, order.id, "sig")
         .await
         .unwrap();
@@ -362,7 +511,7 @@ async fn data_deleted_after_grace_and_recovery_window() {
         .await
         .unwrap();
     assert_eq!(report.marked_grace, 1);
-    // Push past grace (30 days).
+    // Push past grace (7 days).
     let now = chrono::Utc::now() + chrono::Duration::days(31);
     let report = run_maintenance(&svc, &svc.payment_config, now)
         .await
@@ -384,6 +533,23 @@ async fn data_deleted_after_grace_and_recovery_window() {
 }
 
 #[tokio::test]
+async fn yearly_order_extends_twelve_months() {
+    let (svc, w) = services(bad_config());
+    let uid = Uuid::now_v7();
+    w.users.insert(&wallet_user(uid)).await.unwrap();
+    let order = subscription::create_order(&svc, uid, BillingPeriod::Yearly)
+        .await
+        .unwrap();
+    assert_eq!(order.amount, Decimal::from(10));
+    let sub = subscription::verify_order(&svc, w.verifier.as_ref(), uid, order.id, "sig-yearly")
+        .await
+        .unwrap();
+    let monthly = add_month(chrono::Utc::now());
+    assert!(sub.expires_at > monthly, "yearly adds 12 months");
+    assert_eq!(sub.status, SubscriptionStatus::Active);
+}
+
+#[tokio::test]
 async fn renewal_extends_from_remaining_time() {
     let (svc, _w) = services(bad_config());
     let uid = Uuid::now_v7();
@@ -399,7 +565,9 @@ async fn renewal_extends_from_remaining_time() {
 async fn concurrent_verify_only_one_wins() {
     let (svc, w) = services(bad_config());
     let uid = Uuid::now_v7();
-    let order = subscription::create_order(&svc, uid).await.unwrap();
+    let order = subscription::create_order(&svc, uid, BillingPeriod::Monthly)
+        .await
+        .unwrap();
     let svc1 = svc.clone();
     let v1 = w.verifier.clone();
     let o = order.id;

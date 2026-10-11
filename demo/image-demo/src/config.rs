@@ -70,6 +70,25 @@ pub fn preset_earthtone() -> Palette {
     .expect("earthtone hexes are valid")
 }
 
+pub const fn preset_steins() -> Palette {
+    Palette {
+        skin: crate::palette::Rgba::opaque(0xff, 0xe8, 0xd6),
+        skin_shade: crate::palette::Rgba::opaque(0xf0, 0xc8, 0xb0),
+        hair_main: crate::palette::Rgba::opaque(0xc0, 0x3a, 0x2b),
+        hair_shade: crate::palette::Rgba::opaque(0x8e, 0x24, 0x1c),
+        hair_shine: crate::palette::Rgba::opaque(0xe8, 0x6a, 0x4a),
+        eye_iris: crate::palette::Rgba::opaque(0x6b, 0x4f, 0xc7),
+        eye_white: crate::palette::Rgba::opaque(0xff, 0xff, 0xff),
+        clothes_main: crate::palette::Rgba::opaque(0xf5, 0xf2, 0xea),
+        clothes_shade: crate::palette::Rgba::opaque(0xd8, 0xd2, 0xc4),
+        clothes_accent: crate::palette::Rgba::opaque(0xa8, 0x24, 0x20),
+        line: crate::palette::Rgba::opaque(0x1c, 0x18, 0x14),
+        blush: crate::palette::Rgba::opaque(0xe8, 0x8a, 0x86),
+        bg_top: crate::palette::Rgba::opaque(0xc9, 0xc2, 0xac),
+        bg_bottom: crate::palette::Rgba::opaque(0x4a, 0x46, 0x38),
+    }
+}
+
 pub fn preset_night() -> Palette {
     palette_from_hexes([
         "#ffe3cf", "#f3c4ad", "#8e7dbe", "#5d5390", "#c3b8ee", "#ffd166", "#ffffff", "#3d348b",
@@ -91,6 +110,17 @@ mod tests {
         let cfg = CharacterConfig::default();
         assert_eq!(cfg.expression.name(), "happy");
         assert_eq!(cfg.hair.name(), "twin_tails");
+    }
+
+    #[test]
+    fn steins_preset_matches_sample() {
+        let p = preset_steins();
+        assert_eq!(p.hair_main, crate::palette::Rgba::opaque(0xc0, 0x3a, 0x2b));
+        assert_eq!(
+            p.clothes_main,
+            crate::palette::Rgba::opaque(0xf5, 0xf2, 0xea)
+        );
+        assert_eq!(p.line, crate::palette::Rgba::opaque(0x1c, 0x18, 0x14));
     }
 
     #[test]

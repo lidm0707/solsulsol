@@ -20,6 +20,8 @@ pub const OUTRO_SECONDS: f32 = 3.0;
 /// The walkthrough clip: each of the 5 features plays at native recording
 /// speed (~1s) then holds its last frame, so every feature gets 5 seconds.
 pub const DEMO_SECONDS: f32 = 25.0;
+/// Amy's raw piper output is quiet; lift it above the ambient pad.
+pub const VOICE_GAIN_DB: f32 = 9.0;
 
 // App theme (crates/ui/ui_wasm STYLE): dark plum bg/cards, orange accent,
 // pink ghost buttons.
@@ -39,6 +41,13 @@ const CARD_X: f32 = 260.0;
 const CARD_Y: f32 = 130.0;
 const CARD_W: f32 = 1400.0;
 const CARD_H: f32 = 788.0;
+
+/// Screen area inside the card. Fitted to the 16:9 footage (1280x720) at the
+/// full inner height so "slice" never crops the sides.
+const SCREEN_H: f32 = CARD_H - 80.0;
+const SCREEN_W: f32 = SCREEN_H * 16.0 / 9.0;
+const SCREEN_X: f32 = CARD_X + (CARD_W - SCREEN_W) / 2.0;
+const SCREEN_Y: f32 = CARD_Y + 64.0;
 
 static EASE: LazyLock<AnimationRuntime> =
     LazyLock::new(|| AnimationRuntime::new(0.8, &Easing::CubicBezier(0.16, 1.0, 0.3, 1.0)));
@@ -106,11 +115,15 @@ impl Video for DemoVideo<'_> {
             })
             .collect();
         let mut tracks = vec![
-            AudioTrack::new("pad.wav", Second(0.2)..Eof).fade_in(3.0),
+            AudioTrack::new("pad.wav", Second(0.2)..Eof)
+                .fade_in(3.0)
+                .duck_under_voice(),
             AudioTrack::new(
                 "voice_over.wav",
                 Second(INTRO_SECONDS)..Second(INTRO_SECONDS + DEMO_SECONDS),
-            ),
+            )
+            .voice()
+            .gain_db(VOICE_GAIN_DB),
         ];
         tracks.extend(chimes);
         tracks.extend(ticks);
@@ -245,7 +258,7 @@ impl Scene for DemoScene {
             <g font-family={FONT} font-weight={WEIGHT}>
                 <defs>
                     <clipPath id="clip-screen">
-                        <rect x={CARD_X + 16.0} y={CARD_Y + 64.0} width={CARD_W - 32.0} height={CARD_H - 80.0} rx="12" />
+                        <rect x={SCREEN_X} y={SCREEN_Y} width={SCREEN_W} height={SCREEN_H} rx="12" />
                     </clipPath>
                 </defs>
                 <g opacity={ramp(&frame, 0.0)} transform={punch(&frame, 0.0, 0.94)}>
@@ -256,7 +269,7 @@ impl Scene for DemoScene {
                     <circle cx={CARD_X + 108.0} cy={CARD_Y + 34.0} r="10" fill={INK_BORDER} />
                     <text x={CARD_X + CARD_W - 40.0} y={CARD_Y + 46.0} text-anchor="end" font-size="26" fill={MUTED}>"solsulsol — full workflow"</text>
                     <g clip-path="url(#clip-screen)">
-                        <image href={footage.href()} x={CARD_X + 16.0} y={CARD_Y + 64.0} width={CARD_W - 32.0} height={CARD_H - 80.0} preserveAspectRatio="xMidYMid slice" />
+                        <image href={footage.href()} x={SCREEN_X} y={SCREEN_Y} width={SCREEN_W} height={SCREEN_H} preserveAspectRatio="xMidYMid meet" />
                     </g>
                 </g>
                 {caption}

@@ -37,14 +37,12 @@ test(`${FLOW}`, async ({ page }) => {
   await gotoUi(page);
   await uiSignIn(page);
   await page.locator('[aria-label="new-shop"]').click();
-  await expect(page.locator(".modal-overlay")).toContainText("Subscription required", { timeout: 15_000 });
-  await uiSubscribe(page);
   await expect(page.locator('input[placeholder="new shop name"]')).toBeVisible({ timeout: 20_000 });
+  // Subscription gate opens after entering the shop; subscribe there.
   await page.locator('input[placeholder="new shop name"]').fill("Currency Mart");
   await page.locator('[aria-label="create-shop"]').click();
-  const shopChip = page.locator(".shop-chip", { hasText: "Currency Mart" });
-  await expect(shopChip).toBeVisible({ timeout: 15_000 });
-  await shopChip.click();
+  // Unpaid: no entry — the gate blocks before the shop; pay to enter.
+  await uiSubscribe(page);
   await expect(page.locator(".tabbar")).toBeVisible({ timeout: 15_000 });
 
   const { token } = await apiAuth(api, wallet);
@@ -56,7 +54,7 @@ test(`${FLOW}`, async ({ page }) => {
     address: ADDRESS,
   });
 
-  // 02: one good + THB fx so the converted total has a value
+  // 02: one good + swap rate so the converted QR amounts have a value
   await page.locator('[aria-label="tab-goods"]').click();
   await page.locator('[aria-label="create-goods"]').click();
   await page.locator('input[placeholder="name"]').fill("tea");
@@ -70,7 +68,7 @@ test(`${FLOW}`, async ({ page }) => {
     await page.locator('[aria-label="tab-settings"]').click();
     await page.locator('[aria-label="section-tax"]').click();
     if (fx !== undefined) {
-      await page.locator('[aria-label="fx-thb-per-sol"]').fill(fx);
+      await page.locator('[aria-label="fx-thb-per-usd"]').fill(fx);
     }
     await page.locator('[aria-label="currency"]').selectOption(value);
     await page.locator('[aria-label="save-vat"]').click();
@@ -79,24 +77,24 @@ test(`${FLOW}`, async ({ page }) => {
     });
   };
 
-  // 03: THB — total bar shows the baht-converted amount
+  // 03: THB — total bar shows the baht amount (prices are already THB)
   await setCurrency("Thb", FX);
   await page.locator('[aria-label="tab-sell"]').click();
   const tile = page.locator(".goods-tile", { hasText: "tea" });
   await expect(tile).toBeVisible({ timeout: 15_000 });
   await tile.click();
   await expect(page.locator(".total-bar .pay-total")).toContainText("฿");
-  await expect(page.locator(".total-bar .pay-total")).toContainText("144"); // 4 * 36
+  await expect(page.locator(".total-bar .pay-total")).toContainText(PRICE);
   let shop = (await (await api("GET", "/shops", token)).json())[0];
   expect(shop.currency).toBe("thb");
 
-  // 04: USDT — total bar shows the raw ◎ amount
+  // 04: USDT — total bar shows the dollar amount
   await setCurrency("Usdt");
   await page.locator('[aria-label="tab-sell"]').click();
   const tile2 = page.locator(".goods-tile", { hasText: "tea" });
   await expect(tile2).toBeVisible({ timeout: 15_000 });
   await tile2.click();
-  await expect(page.locator(".total-bar .pay-total")).toContainText("\u{25c8}");
+  await expect(page.locator(".total-bar .pay-total")).toContainText("$");
   await expect(page.locator(".total-bar .pay-total")).toContainText(PRICE);
   shop = (await (await api("GET", "/shops", token)).json())[0];
   expect(shop.currency).toBe("usdt");

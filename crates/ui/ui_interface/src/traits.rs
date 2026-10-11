@@ -5,9 +5,9 @@ use pos_api::schema::{
     AddDestinationRequest, AddGoodsRequest, AuthNonceRequest, AuthNonceResponse, AuthResponse,
     AuthVerifyRequest, CheckoutRequest, CreatePaymentOrderRequest, CreateShopRequest,
     DestinationResponse, GoodsResponse, GoodsSalesResponse, InviteAcceptRequest, InviteRequest,
-    InviteResponse, InvoiceResponse, MeResponse, PaymentOrderResponse, Role, ShopMemberResponse,
-    ShopResponse, SubscriptionResponse, UpdateMemberRoleRequest, UpdateShopSettingsRequest,
-    VerifyPaymentRequest,
+    InviteResponse, BillingResponse, MeResponse, PaymentOrderResponse, Role, ShopMemberResponse,
+    ShopResponse, StorageObjectResponse, SubscriptionResponse, UpdateMemberRoleRequest,
+    UpdateShopSettingsRequest, VerifyPaymentRequest,
 };
 use uuid::Uuid;
 
@@ -76,12 +76,24 @@ pub trait ApiClient {
         shop_id: Uuid,
     ) -> Result<Vec<DestinationResponse>, String>;
     async fn checkout(&self, token: &str, req: &CheckoutRequest)
-    -> Result<InvoiceResponse, String>;
-    async fn list_invoices(
+    -> Result<BillingResponse, String>;
+    async fn list_billings(
         &self,
         token: &str,
         shop_id: Uuid,
-    ) -> Result<Vec<InvoiceResponse>, String>;
+    ) -> Result<Vec<BillingResponse>, String>;
+    async fn delete_goods(&self, token: &str, shop_id: Uuid, goods_id: Uuid) -> Result<(), String>;
+    async fn list_storage_objects(
+        &self,
+        token: &str,
+        shop_id: Uuid,
+    ) -> Result<Vec<StorageObjectResponse>, String>;
+    async fn delete_storage_object(
+        &self,
+        token: &str,
+        shop_id: Uuid,
+        key: Uuid,
+    ) -> Result<(), String>;
 }
 
 /// Which invite rows the UI shows.

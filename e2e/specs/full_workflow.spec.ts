@@ -32,30 +32,22 @@ test(`${FLOW} — desktop`, async ({ page }) => {
   await uiSignIn(page);
   await shot(page, "01-signin-dashboard-unpaid");
 
-  // 02: + New shop while unpaid → subscription gate modal, no name form
+  // 02: + New shop while unpaid — creation is free, form opens directly
   await page.locator('[aria-label="new-shop"]').click();
-  await expect(page.locator(".modal-overlay")).toBeVisible({ timeout: 15_000 });
-  await expect(page.locator(".modal-overlay")).toContainText("Subscription required");
-  await expect(page.locator('input[placeholder="new shop name"]')).toHaveCount(0);
-  await shot(page, "02-sub-gate-in-create-modal");
-
-  // 03: pay $1 inside the modal → verify → shop form appears
-  await uiSubscribe(page);
   await expect(page.locator('input[placeholder="new shop name"]')).toBeVisible({ timeout: 20_000 });
-  await shot(page, "03-paid-shop-form-shown");
+  await shot(page, "02-create-form-free");
 
-  // 04: create the shop
+  // 03: create the shop → unpaid: gate blocks BEFORE the shop (no entry)
   await page.locator('input[placeholder="new shop name"]').fill("Full Flow Cafe");
   await page.locator('[aria-label="create-shop"]').click();
-  const shopChip = page.locator(".shop-chip", { hasText: "Full Flow Cafe" });
-  await expect(shopChip).toBeVisible({ timeout: 15_000 });
-  await shot(page, "04-shop-created");
-
-  // 05: enter the shop
-  await shopChip.click();
+  await expect(page.locator(".modal-overlay")).toContainText("Subscription required", {
+    timeout: 15_000,
+  });
+  await expect(page.locator(".tabbar")).toHaveCount(0);
+  await shot(page, "03-created-gate-before-shop");
+  await uiSubscribe(page);
   await expect(page.locator(".tabbar")).toBeVisible({ timeout: 20_000 });
-  await expect(page.locator(".page-title")).toHaveText("New sale");
-  await shot(page, "05-entered-shop");
+  await shot(page, "04-subscribed-entered-shop");
 
   // 06: goods — add an item with price/cost/stock
   await page.locator('[aria-label="tab-goods"]').click();

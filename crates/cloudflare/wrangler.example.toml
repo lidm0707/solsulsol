@@ -15,15 +15,26 @@ binding = "OBJECTS"
 bucket_name = "your-bucket-name"
 
 [vars]
-SOLANA_NETWORK = "devnet"
-SOLANA_RPC_URL = "https://api.devnet.solana.com"
-USDC_MINT = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
+SOLANA_NETWORK = "mainnet-beta"
+SOLANA_RPC_URL = "https://devnet.helius-rpc.com/?api-key=<KEY>"
+# Circle's official mainnet USDC mint (goods QR payments + $1 subscription).
+USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 PAYMENT_RECIPIENT = "REPLACE_WITH_YOUR_WALLET_ADDRESS"
-POS_DOMAIN = "localhost"
+POS_DOMAIN = "shop.sulsolsul.com"
+
+# Bind the custom domain to this worker (zone must be in this CF account).
+routes = [
+  { pattern = "shop.sulsolsul.com", custom_domain = true }
+]
 NONCE_TTL_SECS = "300"
 GRACE_DAYS = "30"
 RECOVERY_DAYS = "7"
 # R2_MAX_UPLOAD_BYTES = "10485760"
+
+# Dev/test instead? Uncomment these three:
+# SOLANA_NETWORK = "devnet"
+# SOLANA_RPC_URL = "https://api.devnet.solana.com"
+# USDC_MINT = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU" (devnet test mint)
 
 [assets]
 directory = "../ui/ui_wasm/dist"

@@ -26,7 +26,7 @@ pub const RECOVERY_DAYS_ENV: &str = "RECOVERY_DAYS";
 pub const DEFAULT_DOMAIN: &str = "localhost";
 pub const DEFAULT_RPC_URL: &str = "https://api.devnet.solana.com";
 pub const DEFAULT_NONCE_TTL_SECS: i64 = 300;
-pub const DEFAULT_GRACE_DAYS: i64 = 30;
+pub const DEFAULT_GRACE_DAYS: i64 = 7;
 pub const DEFAULT_RECOVERY_DAYS: i64 = 7;
 pub const STORAGE_DIR_ENV: &str = "POS_STORAGE_DIR";
 pub const MAX_UPLOAD_BYTES_ENV: &str = "POS_MAX_UPLOAD_BYTES";
@@ -121,7 +121,7 @@ async fn wire_postgres(builder: AppServicesBuilder, url: &str) -> Result<AppServ
         .goods(Arc::new(repos::PgGoodsRepo { pool: pool.clone() }))
         .destinations(Arc::new(repos::PgDestinationRepo { pool: pool.clone() }))
         .invites(Arc::new(repos::PgInviteRepo { pool: pool.clone() }))
-        .invoices(Arc::new(repos::PgInvoiceRepo { pool: pool.clone() }))
+        .billings(Arc::new(repos::PgBillingRepo { pool: pool.clone() }))
         .nonces(Arc::new(repos::PgNonceRepo { pool: pool.clone() }))
         .subscriptions(Arc::new(repos::PgSubscriptionRepo { pool: pool.clone() }))
         .orders(Arc::new(repos::PgPaymentOrderRepo { pool: pool.clone() }))

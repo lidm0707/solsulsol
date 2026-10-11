@@ -32,7 +32,7 @@ async fn admin_can_invite_employee_but_not_owner() {
             name: "t".into(),
             vat_mode: Default::default(),
             vat_rate: Decimal::ZERO,
-            fx_thb_per_sol: Decimal::ZERO,
+            fx_thb_per_usd: Decimal::ZERO,
             currency: Default::default(),
             deleted_at: None,
         })
@@ -74,7 +74,7 @@ async fn destination_requires_admin() {
             emp_id,
             SHOP,
             addr,
-            SplToken::Sol
+            SplToken::Usdc
         )
         .await,
         Err(ShopError::Forbidden)
@@ -152,7 +152,7 @@ async fn goods_rejected_without_active_subscription() {
                 barcode: None,
                 icon: Default::default(),
                 color: Default::default(),
-            goods_type: Default::default(),
+                goods_type: Default::default(),
             },
         )
         .await,

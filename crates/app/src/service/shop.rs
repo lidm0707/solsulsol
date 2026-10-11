@@ -21,6 +21,7 @@ pub enum ShopError {
     InviteeUnknown,
     InviteNotAcceptable,
     NotFound,
+    GoodsBillingd,
     Subscription(SubError),
     Rule(DomainRuleError),
     Storage(String),
@@ -43,7 +44,7 @@ pub async fn create_shop(
         name: name.to_owned(),
         vat_mode: VatMode::default(),
         vat_rate: rust_decimal::Decimal::ZERO,
-        fx_thb_per_sol: rust_decimal::Decimal::ZERO,
+        fx_thb_per_usd: rust_decimal::Decimal::ZERO,
         currency: Currency::default(),
         deleted_at: None,
     };
@@ -140,18 +141,18 @@ pub async fn update_settings(
     shop_id: uuid::Uuid,
     vat_mode: VatMode,
     vat_rate: rust_decimal::Decimal,
-    fx_thb_per_sol: rust_decimal::Decimal,
+    fx_thb_per_usd: rust_decimal::Decimal,
     currency: Currency,
 ) -> Result<(), ShopError> {
     require_min_role(svc, actor_id, shop_id, Role::Admin).await?;
     if vat_rate < VAT_RATE_MIN || vat_rate > VAT_RATE_MAX {
         return Err(ShopError::Forbidden);
     }
-    if fx_thb_per_sol < rust_decimal::Decimal::ZERO {
+    if fx_thb_per_usd < rust_decimal::Decimal::ZERO {
         return Err(ShopError::Forbidden);
     }
     svc.shops
-        .update_settings(shop_id, vat_mode, vat_rate, fx_thb_per_sol, currency)
+        .update_settings(shop_id, vat_mode, vat_rate, fx_thb_per_usd, currency)
         .await?;
     tracing::info!(shop_id = %shop_id, ?vat_mode, %vat_rate, ?currency, "shop settings updated");
     Ok(())

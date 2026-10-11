@@ -60,11 +60,36 @@ pub async fn list_goods(
     Ok(svc.goods.find_by_shop(shop_id).await?)
 }
 
+/// Admin delete; blocked while any billing line references the goods so
+/// billing history keeps pointing at a real row.
+pub async fn delete_goods(
+    svc: &AppServices,
+    actor_id: uuid::Uuid,
+    shop_id: uuid::Uuid,
+    goods_id: uuid::Uuid,
+) -> Result<(), ShopError> {
+    require_min_role(svc, actor_id, shop_id, Role::Admin).await?;
+    let goods = svc
+        .goods
+        .find_by_id(goods_id)
+        .await?
+        .ok_or(ShopError::NotFound)?;
+    if goods.shop_id != shop_id {
+        return Err(ShopError::NotFound);
+    }
+    if svc.billings.goods_has_lines(goods_id).await? {
+        return Err(ShopError::GoodsBillingd);
+    }
+    svc.goods.delete(goods_id).await?;
+    tracing::info!(shop_id = %shop_id, goods_id = %goods_id, "goods deleted");
+    Ok(())
+}
+
 pub async fn goods_sales(
     svc: &AppServices,
     actor_id: uuid::Uuid,
     shop_id: uuid::Uuid,
 ) -> Result<Vec<(uuid::Uuid, u64)>, ShopError> {
     require_min_role(svc, actor_id, shop_id, Role::Employee).await?;
-    Ok(svc.invoices.sales_by_goods(shop_id).await?)
+    Ok(svc.billings.sales_by_goods(shop_id).await?)
 }

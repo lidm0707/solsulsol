@@ -1,7 +1,7 @@
 //! D1 repositories implementing the pos-port storage traits.
 //!
-//! D1 (SQLite) has no interactive transactions, so `InvoiceRepo::insert`
-//! writes the invoice header + lines as one atomic `batch()`. Decimals and
+//! D1 (SQLite) has no interactive transactions, so `BillingRepo::insert`
+//! writes the billing header + lines as one atomic `batch()`. Decimals and
 //! timestamps are stored as TEXT and parsed back on read.
 
 use std::str::FromStr;
@@ -13,14 +13,14 @@ use pos_app::domain::entities::subscription::{
     AuthNonce, PaymentOrder, PaymentOrderStatus, Subscription, SubscriptionStatus,
 };
 use pos_app::domain::entities::{
-    Currency, Goods, Invite, InviteStatus, Invoice, InvoiceLine, InvoiceStatus, PaymentDestination,
+    Billing, BillingLine, BillingStatus, Currency, Goods, Invite, InviteStatus, PaymentDestination,
     Shop, ShopMember, User, VatMode,
 };
 use pos_app::domain::value_objects::{
     Chain, ChainAddress, Email, GoodsIcon, GoodsType, Money, PastelColor, Role, SplToken, Wallet,
 };
 use pos_app::port::database::{
-    DestinationRepo, GoodsRepo, InviteRepo, InvoiceRepo, NonceRepo, PaymentOrderRepo,
+    BillingRepo, DestinationRepo, GoodsRepo, InviteRepo, NonceRepo, PaymentOrderRepo,
     ShopMemberRepo, ShopRepo, StorageError, StorageUsageRepo, SubscriptionRepo, UserRepo,
 };
 
@@ -195,7 +195,7 @@ struct ShopRow {
     #[serde(deserialize_with = "num_str")]
     vat_rate: String,
     #[serde(default, deserialize_with = "num_str")]
-    fx_thb_per_sol: String,
+    fx_thb_per_usd: String,
     #[serde(default)]
     currency: String,
     #[serde(default)]
@@ -209,7 +209,7 @@ fn shop_row(r: ShopRow) -> Shop {
         name: r.name,
         vat_mode: VatMode::parse(&r.vat_mode).unwrap_or_default(),
         vat_rate: parse_dec(&r.vat_rate),
-        fx_thb_per_sol: parse_dec(&r.fx_thb_per_sol),
+        fx_thb_per_usd: parse_dec(&r.fx_thb_per_usd),
         currency: Currency::parse(&r.currency).unwrap_or_default(),
         deleted_at: r.deleted_at.as_deref().map(parse_ts),
     }
@@ -321,7 +321,7 @@ fn invite_row(r: InviteRow) -> Invite {
 }
 
 #[derive(serde::Deserialize)]
-struct InvoiceHeadRow {
+struct BillingHeadRow {
     id: String,
     shop_id: String,
     status: String,
@@ -331,11 +331,11 @@ struct InvoiceHeadRow {
     vat_rate: String,
 }
 
-fn head_row(r: InvoiceHeadRow) -> (Uuid, Uuid, InvoiceStatus, Uuid, VatMode, Decimal) {
+fn head_row(r: BillingHeadRow) -> (Uuid, Uuid, BillingStatus, Uuid, VatMode, Decimal) {
     (
         parse_uid(&r.id),
         parse_uid(&r.shop_id),
-        InvoiceStatus::parse(&r.status).unwrap_or(InvoiceStatus::Pending),
+        BillingStatus::parse(&r.status).unwrap_or(BillingStatus::Pending),
         parse_uid(&r.destination_id),
         VatMode::parse(&r.vat_mode).unwrap_or_default(),
         parse_dec(&r.vat_rate),
@@ -353,9 +353,9 @@ struct LineRow {
     qty: i64,
 }
 
-fn line_row(r: LineRow) -> InvoiceLine {
+fn line_row(r: LineRow) -> BillingLine {
     let price = parse_dec(&r.price);
-    InvoiceLine {
+    BillingLine {
         goods_id: parse_uid(&r.goods_id),
         name: r.name,
         price: Money::new(price).unwrap_or_else(|_| Money::one()),
@@ -421,9 +421,9 @@ pub struct D1ShopRepo {
 }
 
 const SHOP_INSERT: &str =
-    "INSERT INTO shops (id, owner_id, name, vat_mode, vat_rate, fx_thb_per_sol, currency, deleted_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)";
+    "INSERT INTO shops (id, owner_id, name, vat_mode, vat_rate, fx_thb_per_usd, currency, deleted_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)";
 const SHOP_SELECT: &str =
-    "SELECT id, owner_id, name, vat_mode, vat_rate, fx_thb_per_sol, currency, deleted_at FROM shops WHERE deleted_at IS NULL";
+    "SELECT id, owner_id, name, vat_mode, vat_rate, fx_thb_per_usd, currency, deleted_at FROM shops WHERE deleted_at IS NULL";
 const SHOP_SOFT_DELETE: &str =
     "UPDATE shops SET deleted_at = ?2 WHERE owner_id = ?1 AND deleted_at IS NULL";
 const SHOP_HARD_DELETE: &str = "DELETE FROM shops WHERE deleted_at IS NOT NULL AND deleted_at < ?1";
@@ -440,7 +440,7 @@ impl ShopRepo for D1ShopRepo {
                 js_text(&shop.name),
                 js_text(shop.vat_mode.as_str()),
                 js_dec(shop.vat_rate),
-                js_dec(shop.fx_thb_per_sol),
+                js_dec(shop.fx_thb_per_usd),
                 js_text(shop.currency.as_str()),
                 js_opt_text(shop.deleted_at.as_ref().map(|d| d.to_rfc3339()).as_deref()),
             ],
@@ -461,7 +461,7 @@ impl ShopRepo for D1ShopRepo {
     async fn find_for_user(&self, user_id: Uuid) -> Result<Vec<Shop>, String> {
         query_all(
             &self.db,
-            "SELECT s.id, s.owner_id, s.name, s.vat_mode, s.vat_rate, s.fx_thb_per_sol, s.currency FROM shops s \
+            "SELECT s.id, s.owner_id, s.name, s.vat_mode, s.vat_rate, s.fx_thb_per_usd, s.currency FROM shops s \
              JOIN shop_members m ON m.shop_id = s.id WHERE m.user_id = ?1 AND s.deleted_at IS NULL",
             &[js_uid(user_id)],
         )
@@ -474,17 +474,17 @@ impl ShopRepo for D1ShopRepo {
         id: Uuid,
         vat_mode: VatMode,
         vat_rate: Decimal,
-        fx_thb_per_sol: Decimal,
+        fx_thb_per_usd: Decimal,
         currency: Currency,
     ) -> Result<(), String> {
         exec(
             &self.db,
-            "UPDATE shops SET vat_mode = ?2, vat_rate = ?3, fx_thb_per_sol = ?4, currency = ?5 WHERE id = ?1",
+            "UPDATE shops SET vat_mode = ?2, vat_rate = ?3, fx_thb_per_usd = ?4, currency = ?5 WHERE id = ?1",
             &[
                 js_uid(id),
                 js_text(vat_mode.as_str()),
                 js_dec(vat_rate),
-                js_dec(fx_thb_per_sol),
+                js_dec(fx_thb_per_usd),
                 js_text(currency.as_str()),
             ],
         )
@@ -620,6 +620,25 @@ impl GoodsRepo for D1GoodsRepo {
         }
         Ok(())
     }
+
+    async fn find_by_id(&self, goods_id: Uuid) -> Result<Option<Goods>, String> {
+        query_one(
+            &self.db,
+            &format!("{GOODS_SELECT} WHERE id = ?1"),
+            &[js_uid(goods_id)],
+        )
+        .await
+        .map(|r: Option<GoodsRow>| r.map(goods_row))
+    }
+
+    async fn delete(&self, goods_id: Uuid) -> Result<(), String> {
+        exec(
+            &self.db,
+            "DELETE FROM goods WHERE id = ?1",
+            &[js_uid(goods_id)],
+        )
+        .await
+    }
 }
 
 // --- destinations ---
@@ -737,20 +756,20 @@ impl InviteRepo for D1InviteRepo {
     }
 }
 
-// --- invoices ---
+// --- billings ---
 
-pub struct D1InvoiceRepo {
+pub struct D1BillingRepo {
     pub db: Db,
 }
 
-const INVOICE_INSERT: &str =
-    "INSERT INTO invoices (id, shop_id, status, destination_id, vat_mode, vat_rate) VALUES (?1, ?2, ?3, ?4, ?5, ?6)";
+const BILLING_INSERT: &str =
+    "INSERT INTO billings (id, shop_id, status, destination_id, vat_mode, vat_rate) VALUES (?1, ?2, ?3, ?4, ?5, ?6)";
 const LINE_INSERT: &str =
-    "INSERT INTO invoice_lines (invoice_id, goods_id, name, price, cost, qty) VALUES (?1, ?2, ?3, ?4, ?5, ?6)";
-const INVOICE_SELECT: &str =
-    "SELECT id, shop_id, status, destination_id, vat_mode, vat_rate FROM invoices";
+    "INSERT INTO billing_lines (billing_id, goods_id, name, price, cost, qty) VALUES (?1, ?2, ?3, ?4, ?5, ?6)";
+const BILLING_SELECT: &str =
+    "SELECT id, shop_id, status, destination_id, vat_mode, vat_rate FROM billings";
 
-impl D1InvoiceRepo {
+impl D1BillingRepo {
     async fn fetch_destination(&self, id: Uuid) -> Result<PaymentDestination, String> {
         #[derive(serde::Deserialize)]
         struct DestRefRow {
@@ -771,7 +790,7 @@ impl D1InvoiceRepo {
                     id: NIL,
                     shop_id: NIL,
                     address: addr,
-                    token: SplToken::Sol,
+                    token: SplToken::default(),
                 })
                 .map_err(|_| String::from("const fallback address must parse"));
         };
@@ -785,11 +804,11 @@ impl D1InvoiceRepo {
         })
     }
 
-    async fn fetch_lines(&self, invoice_id: Uuid) -> Result<Vec<InvoiceLine>, String> {
+    async fn fetch_lines(&self, billing_id: Uuid) -> Result<Vec<BillingLine>, String> {
         let rows: Vec<LineRow> = query_all(
             &self.db,
-            "SELECT goods_id, name, price, cost, qty FROM invoice_lines WHERE invoice_id = ?1",
-            &[js_uid(invoice_id)],
+            "SELECT goods_id, name, price, cost, qty FROM billing_lines WHERE billing_id = ?1",
+            &[js_uid(billing_id)],
         )
         .await?;
         Ok(rows.into_iter().map(line_row).collect())
@@ -797,28 +816,37 @@ impl D1InvoiceRepo {
 }
 
 #[async_trait]
-impl InvoiceRepo for D1InvoiceRepo {
-    async fn insert(&self, invoice: &Invoice) -> Result<(), String> {
+impl BillingRepo for D1BillingRepo {
+    async fn hard_delete_expired(&self, before: DateTime<Utc>) -> Result<u64, String> {
+        exec_count(
+            &self.db,
+            "DELETE FROM billings WHERE shop_id IN (SELECT id FROM shops WHERE deleted_at IS NOT NULL AND deleted_at < ?1)",
+            &[js_ts(before)],
+        )
+        .await
+    }
+
+    async fn insert(&self, billing: &Billing) -> Result<(), String> {
         let head = self
             .db
-            .prepare(INVOICE_INSERT)
+            .prepare(BILLING_INSERT)
             .bind(&[
-                js_uid(invoice.id),
-                js_uid(invoice.shop_id),
-                js_text(invoice.status.as_str()),
-                js_uid(invoice.destination.id),
-                js_text(invoice.vat_mode.as_str()),
-                js_dec(invoice.vat_rate),
+                js_uid(billing.id),
+                js_uid(billing.shop_id),
+                js_text(billing.status.as_str()),
+                js_uid(billing.destination.id),
+                js_text(billing.vat_mode.as_str()),
+                js_dec(billing.vat_rate),
             ])
             .map_err(err)?;
-        let mut stmts = Vec::with_capacity(invoice.lines.len() + 1);
+        let mut stmts = Vec::with_capacity(billing.lines.len() + 1);
         stmts.push(head);
-        for l in &invoice.lines {
+        for l in &billing.lines {
             let stmt = self
                 .db
                 .prepare(LINE_INSERT)
                 .bind(&[
-                    js_uid(invoice.id),
+                    js_uid(billing.id),
                     js_uid(l.goods_id),
                     js_text(&l.name),
                     js_dec(l.price.amount()),
@@ -839,21 +867,21 @@ impl InvoiceRepo for D1InvoiceRepo {
         Ok(())
     }
 
-    async fn find_by_id(&self, id: Uuid) -> Result<Option<Invoice>, String> {
+    async fn find_by_id(&self, id: Uuid) -> Result<Option<Billing>, String> {
         let Some(head) = query_one(
             &self.db,
-            &format!("{INVOICE_SELECT} WHERE id = ?1"),
+            &format!("{BILLING_SELECT} WHERE id = ?1"),
             &[js_uid(id)],
         )
         .await
-        .map(|r: Option<InvoiceHeadRow>| r.map(head_row))?
+        .map(|r: Option<BillingHeadRow>| r.map(head_row))?
         else {
             return Ok(None);
         };
         let (id, shop_id, status, dest_id, vat_mode, vat_rate) = head;
         let destination = self.fetch_destination(dest_id).await?;
         let lines = self.fetch_lines(id).await?;
-        Ok(Some(Invoice {
+        Ok(Some(Billing {
             id,
             shop_id,
             status,
@@ -864,10 +892,10 @@ impl InvoiceRepo for D1InvoiceRepo {
         }))
     }
 
-    async fn list_by_shop(&self, shop_id: Uuid) -> Result<Vec<Invoice>, String> {
-        let heads: Vec<InvoiceHeadRow> = query_all(
+    async fn list_by_shop(&self, shop_id: Uuid) -> Result<Vec<Billing>, String> {
+        let heads: Vec<BillingHeadRow> = query_all(
             &self.db,
-            &format!("{INVOICE_SELECT} WHERE shop_id = ?1"),
+            &format!("{BILLING_SELECT} WHERE shop_id = ?1"),
             &[js_uid(shop_id)],
         )
         .await?;
@@ -876,7 +904,7 @@ impl InvoiceRepo for D1InvoiceRepo {
             let (id, shop_id, status, dest_id, vat_mode, vat_rate) = head_row(head);
             let destination = self.fetch_destination(dest_id).await?;
             let lines = self.fetch_lines(id).await?;
-            out.push(Invoice {
+            out.push(Billing {
                 id,
                 shop_id,
                 status,
@@ -898,8 +926,8 @@ impl InvoiceRepo for D1InvoiceRepo {
         }
         let rows: Vec<SalesRow> = query_all(
             &self.db,
-            "SELECT l.goods_id AS goods_id, SUM(l.qty) AS sold FROM invoice_lines l \
-             JOIN invoices i ON i.id = l.invoice_id \
+            "SELECT l.goods_id AS goods_id, SUM(l.qty) AS sold FROM billing_lines l \
+             JOIN billings i ON i.id = l.billing_id \
              WHERE i.shop_id = ?1 AND i.status = 'paid' \
              GROUP BY l.goods_id ORDER BY SUM(l.qty) DESC",
             &[js_uid(shop_id)],
@@ -909,6 +937,21 @@ impl InvoiceRepo for D1InvoiceRepo {
             .into_iter()
             .map(|r| (parse_uid(&r.goods_id), r.sold.parse::<u64>().unwrap_or(0)))
             .collect())
+    }
+
+    async fn goods_has_lines(&self, goods_id: Uuid) -> Result<bool, String> {
+        #[derive(serde::Deserialize)]
+        struct CountRow {
+            #[serde(deserialize_with = "num_str")]
+            n: String,
+        }
+        let row: Option<CountRow> = query_one(
+            &self.db,
+            "SELECT COUNT(*) AS n FROM billing_lines WHERE goods_id = ?1",
+            &[js_uid(goods_id)],
+        )
+        .await?;
+        Ok(row.is_some_and(|r| r.n.parse::<i64>().unwrap_or(0) > 0))
     }
 }
 
@@ -1067,7 +1110,7 @@ impl SubscriptionRepo for D1SubscriptionRepo {
     async fn list_to_delete(&self, now: DateTime<Utc>) -> Result<Vec<Subscription>, String> {
         query_all(
             &self.db,
-            &format!("{SUB_SELECT} WHERE status = 'lapsed' AND grace_until IS NOT NULL AND grace_until <= ?1"),
+            &format!("{SUB_SELECT} WHERE status IN ('lapsed', 'deleted') AND grace_until IS NOT NULL AND grace_until <= ?1"),
             &[js_ts(now)],
         )
         .await
@@ -1252,6 +1295,43 @@ impl StorageUsageRepo for D1StorageRepo {
         let row: Option<BytesRow> =
             query_one(&self.db, STORAGE_TOTAL_SELECT, &[js_uid(shop_id)]).await?;
         Ok(row.map(|r| r.bytes).unwrap_or(0))
+    }
+
+    async fn list(&self, shop_id: Uuid) -> Result<Vec<(Uuid, i64)>, StorageError> {
+        #[derive(serde::Deserialize)]
+        struct Row {
+            key: String,
+            bytes: i64,
+        }
+        let rows: Vec<Row> = query_all(
+            &self.db,
+            "SELECT key, bytes FROM storage_files WHERE shop_id = ?1 ORDER BY key",
+            &[js_uid(shop_id)],
+        )
+        .await?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|r| Uuid::parse_str(&r.key).ok().map(|k| (k, r.bytes)))
+            .collect())
+    }
+
+    async fn remove(&self, shop_id: Uuid, key: Uuid) -> Result<i64, StorageError> {
+        exec(
+            &self.db,
+            "DELETE FROM storage_files WHERE shop_id = ?1 AND key = ?2",
+            &[js_uid(shop_id), js_uid(key)],
+        )
+        .await?;
+        let row: Option<BytesRow> =
+            query_one(&self.db, STORAGE_TOTAL_SELECT, &[js_uid(shop_id)]).await?;
+        let total: i64 = row.map(|r| r.bytes).unwrap_or(0);
+        exec(
+            &self.db,
+            STORAGE_TOTAL_UPSERT,
+            &[js_uid(shop_id), js_i64(total)],
+        )
+        .await?;
+        Ok(total)
     }
 }
 

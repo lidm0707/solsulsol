@@ -24,7 +24,7 @@ impl FetchClient {
     async fn json<T: serde::de::DeserializeOwned>(req: Request) -> Result<T, String> {
         let res = req.send().await.map_err(|e| e.to_string())?;
         if !res.ok() {
-            return Err(err_msg(res.status()));
+            return Err(err_msg(res.status(), res.text().await.ok().as_deref()));
         }
         res.json::<T>().await.map_err(|e| e.to_string())
     }
@@ -34,7 +34,7 @@ impl FetchClient {
         if res.ok() {
             Ok(())
         } else {
-            Err(err_msg(res.status()))
+            Err(err_msg(res.status(), res.text().await.ok().as_deref()))
         }
     }
 
@@ -64,6 +64,14 @@ impl FetchClient {
             .unwrap_or_else(|e| impossible_request(&e.to_string()))
     }
 
+    fn delete_authed(&self, path: &str, token: &str) -> Request {
+        RequestBuilder::new(&self.url(path))
+            .method(Method::DELETE)
+            .header("Authorization", &format!("Bearer {token}"))
+            .build()
+            .unwrap_or_else(|e| impossible_request(&e.to_string()))
+    }
+
     fn put_json(
         &self,
         path: &str,
@@ -79,12 +87,21 @@ impl FetchClient {
     }
 }
 
-fn err_msg(status: u16) -> String {
+#[derive(serde::Deserialize)]
+struct ErrorBody {
+    error: String,
+}
+
+fn err_msg(status: u16, body: Option<&str>) -> String {
     if status == HTTP_FORBIDDEN {
-        String::from(SUBSCRIPTION_REQUIRED)
-    } else {
-        format!("http {status}")
+        return String::from(SUBSCRIPTION_REQUIRED);
     }
+    if let Some(text) = body
+        && let Ok(parsed) = serde_json::from_str::<ErrorBody>(text)
+    {
+        return parsed.error;
+    }
+    format!("http {status}")
 }
 
 // A headerless GET cannot fail to build; this only silences the type system.
@@ -261,19 +278,50 @@ impl ApiClient for FetchClient {
         &self,
         token: &str,
         req: &CheckoutRequest,
-    ) -> Result<InvoiceResponse, String> {
+    ) -> Result<BillingResponse, String> {
         let path = pos_api::routes::SHOP_CHECKOUT.replace("{shop_id}", &req.shop_id.to_string());
         let req = self.post_json(&path, Some(token), req)?;
         Self::json(req).await
     }
 
-    async fn list_invoices(
+    async fn list_billings(
         &self,
         token: &str,
         shop_id: Uuid,
-    ) -> Result<Vec<InvoiceResponse>, String> {
+    ) -> Result<Vec<BillingResponse>, String> {
         let path = pos_api::routes::SHOP_BILLINGS.replace("{shop_id}", &shop_id.to_string());
         let req = self.get_authed(&path, token);
         Self::json(req).await
+    }
+
+    async fn delete_goods(&self, token: &str, shop_id: Uuid, goods_id: Uuid) -> Result<(), String> {
+        let path = pos_api::routes::SHOP_GOODS_ID
+            .replace("{shop_id}", &shop_id.to_string())
+            .replace("{goods_id}", &goods_id.to_string());
+        let req = self.delete_authed(&path, token);
+        Self::empty(req).await
+    }
+
+    async fn list_storage_objects(
+        &self,
+        token: &str,
+        shop_id: Uuid,
+    ) -> Result<Vec<StorageObjectResponse>, String> {
+        let path = pos_api::routes::SHOP_STORAGE_OBJECTS.replace("{shop_id}", &shop_id.to_string());
+        let req = self.get_authed(&path, token);
+        Self::json(req).await
+    }
+
+    async fn delete_storage_object(
+        &self,
+        token: &str,
+        shop_id: Uuid,
+        key: Uuid,
+    ) -> Result<(), String> {
+        let path = pos_api::routes::SHOP_STORAGE_OBJECT
+            .replace("{shop_id}", &shop_id.to_string())
+            .replace("{key}", &key.to_string());
+        let req = self.delete_authed(&path, token);
+        Self::empty(req).await
     }
 }

@@ -3,8 +3,7 @@
 Working guide for agents (and humans) on this repo. Rust workspace, axum backend,
 Postgres (sqlx), Dioxus/WASM frontend, Playwright e2e.
 
-Two backends share the same core layers (`pos-domain`, `pos-app`, `pos-http`,
-`pos-api`):
+Two backends share the same core layers (`pos-app`, `pos-http`, `pos-api`):
 
 - **Self-hosted** (`crates/backend`): axum binary + Postgres via sqlx.
 - **Cloudflare Worker** (`crates/cloudflare`): workers-rs (Rust → WASM) + D1.
@@ -27,11 +26,20 @@ worker is in the workspace, so `cargo check --workspace` covers it.
 ```
 crates/
   api/          pos-api: shared request/response schema (serde), route constants
-  backend/      pos-backend: the app
+  app/          pos-app: the core layers
     domain/         entities + value objects (validation lives here)
-    app/            use-case services (invoice, destination, shop, pdf, qr)
-    port/           repo/renderer traits
-    infra/          http_adapter (axum router) + database_adapter (sqlx repos)
+    service/        use-case services (auth, shop, goods, destination,
+                    billing, pdf, subscription, maintenance)
+    port/           repo/renderer traits (database, qr, promptpay, solana,
+                    encryption, object_storage)
+    dto/            internal transfer types
+    config.rs       PaymentConfig (network, USDC mint, subscription)
+  http/         pos-http: shared axum router + handlers (build_router)
+  backend/      pos-backend: the self-hosted binary
+    core/           runtime/state wiring
+    infra/          adapters: database (sqlx repos), qr, promptpay, solana,
+                    encryption, storage
+    tests/          integration tests (app, domain, pdf, subscription, storage)
   cloudflare/   pos-worker: same app on Cloudflare Workers (workers-rs + D1)
     src/lib.rs      worker entry, strips /api prefix, calls build_router
     src/infra/      D1-backed repo adapters (only Cloudflare-specific layer)
@@ -40,17 +48,24 @@ crates/
   ui/
     ui_interface/   ApiClient trait (frontend boundary)
     ui_wasm/        Dioxus UI (FetchClient implements ApiClient)
+  promptpay/    pos-promptpay: EMVCo PromptPay payload encoder
+  qr_code/      pos-qr-code: QR rendering
+  barcode/      pos-barcode: barcode encoding
+  sol_wallet_adaptor/  on-chain tx verification client
+manual/         illustrated user manual (one screenshot per step, images/)
+demo/           landing page, demo videos, video renderer, voice-over tools
 docker/         docker-compose + migrations (numbered 001..NNN)
 e2e/            Playwright tests
 .plans/         numbered plan files (00..NN)
 bench/          benchmark notes and results
+docs/           system/design docs + submission notes
 ```
 
 ## Workflow for a change
 
 1. Create/update a numbered plan in `.plans/` (next number after the highest).
 2. Make the change through the layers: domain → app service → port/repo →
-   http_adapter/router → api schema → UI. Keep each layer's change consistent
+   pos-http router → api schema → UI. Keep each layer's change consistent
    (a new entity field must be threaded through every layer and the DB).
 3. DB changes: add a new numbered migration in `docker/migrations/`
    (`007_xxx.sql` style). Never edit existing migrations. For the worker,

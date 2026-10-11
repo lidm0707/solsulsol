@@ -48,14 +48,12 @@ test(`${FLOW}`, async ({ page }) => {
   await gotoUi(page);
   await uiSignIn(page);
   await page.locator('[aria-label="new-shop"]').click();
-  await expect(page.locator(".modal-overlay")).toContainText("Subscription required", { timeout: 15_000 });
-  await uiSubscribe(page);
   await expect(page.locator('input[placeholder="new shop name"]')).toBeVisible({ timeout: 20_000 });
+  // Subscription gate opens after entering the shop; subscribe there.
   await page.locator('input[placeholder="new shop name"]').fill("VAT Cafe");
   await page.locator('[aria-label="create-shop"]').click();
-  const shopChip = page.locator(".shop-chip", { hasText: "VAT Cafe" });
-  await expect(shopChip).toBeVisible({ timeout: 15_000 });
-  await shopChip.click();
+  // Unpaid: no entry — the gate blocks before the shop; pay to enter.
+  await uiSubscribe(page);
   await expect(page.locator(".tabbar")).toBeVisible({ timeout: 15_000 });
 
   const { token } = await apiAuth(api, wallet);

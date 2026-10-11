@@ -1,5 +1,6 @@
-/target
+
 node_modules/
+.DS_Store
 .plans/
 bench/
 snapshots/
@@ -17,3 +18,7 @@ wrangler.toml
 *.mp4
 *.ttf
 *.wav
+tmp_frames/
+target/
+models/
+dist/

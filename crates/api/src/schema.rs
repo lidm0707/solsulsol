@@ -41,7 +41,6 @@ pub enum Chain {
 #[serde(rename_all = "snake_case")]
 pub enum SplToken {
     #[default]
-    Sol,
     Usdc,
     Usdt,
 }
@@ -130,9 +129,24 @@ pub struct SubscriptionResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StorageObjectResponse {
+    pub key: Uuid,
+    pub bytes: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BillingPeriodApi {
+    Monthly,
+    Yearly,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreatePaymentOrderRequest {
     #[serde(default)]
     pub renew: bool,
+    #[serde(default)]
+    pub period: Option<BillingPeriodApi>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -172,7 +186,7 @@ pub struct ShopResponse {
     #[serde(default)]
     pub vat_rate: rust_decimal::Decimal,
     #[serde(default)]
-    pub fx_thb_per_sol: rust_decimal::Decimal,
+    pub fx_thb_per_usd: rust_decimal::Decimal,
     #[serde(default)]
     pub currency: Currency,
 }
@@ -281,7 +295,7 @@ pub struct CheckoutRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct InvoiceLineResponse {
+pub struct BillingLineResponse {
     pub name: String,
     pub price: rust_decimal::Decimal,
     pub qty: u32,
@@ -291,11 +305,12 @@ pub struct InvoiceLineResponse {
 pub const DECIMAL_ZERO: rust_decimal::Decimal = rust_decimal::Decimal::ZERO;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct InvoiceResponse {
-    pub invoice_id: Uuid,
+pub struct BillingResponse {
+    pub billing_id: Uuid,
     pub shop_id: Uuid,
     pub total: rust_decimal::Decimal,
-    /// Amount encoded in the QR payload (THB for PromptPay, else `total`).
+    /// Amount encoded in the QR payload (THB for PromptPay, USD-token amount
+    /// for Solana — see `billing::qr_amount`; may differ from `total`).
     #[serde(default)]
     pub qr_amount: rust_decimal::Decimal,
     #[serde(default)]
@@ -307,7 +322,7 @@ pub struct InvoiceResponse {
     #[serde(default)]
     pub vat_amount: rust_decimal::Decimal,
     pub cost: rust_decimal::Decimal,
-    pub lines: Vec<InvoiceLineResponse>,
+    pub lines: Vec<BillingLineResponse>,
     pub destination: DestinationResponse,
     pub qr_payload: String,
     pub pdf_url: String,
@@ -315,7 +330,7 @@ pub struct InvoiceResponse {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum InvoiceStatus {
+pub enum BillingStatus {
     Pending,
     Paid,
     Cancelled,
@@ -333,8 +348,8 @@ pub enum VatMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum Currency {
-    #[default]
     Thb,
+    #[default]
     Usdt,
 }
 
@@ -343,7 +358,7 @@ pub struct UpdateShopSettingsRequest {
     pub vat_mode: VatMode,
     pub vat_rate: rust_decimal::Decimal,
     #[serde(default)]
-    pub fx_thb_per_sol: rust_decimal::Decimal,
+    pub fx_thb_per_usd: rust_decimal::Decimal,
     #[serde(default)]
     pub currency: Currency,
 }

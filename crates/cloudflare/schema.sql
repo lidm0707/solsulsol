@@ -19,8 +19,8 @@ CREATE TABLE IF NOT EXISTS shops (
     name           TEXT NOT NULL,
     vat_mode       TEXT NOT NULL DEFAULT 'none',
     vat_rate       NUMERIC(6, 4) NOT NULL DEFAULT 0,
-    fx_thb_per_sol TEXT NOT NULL DEFAULT '0',
-    currency       TEXT NOT NULL DEFAULT 'thb',
+    fx_thb_per_usd TEXT NOT NULL DEFAULT '0',
+    currency       TEXT NOT NULL DEFAULT 'usdt',
     deleted_at     TEXT
 );
 
@@ -65,7 +65,7 @@ CREATE TABLE IF NOT EXISTS invites (
     expires_at TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS invoices (
+CREATE TABLE IF NOT EXISTS billings (
     id             TEXT PRIMARY KEY,
     shop_id        TEXT NOT NULL REFERENCES shops(id),
     status         TEXT NOT NULL DEFAULT 'pending',
@@ -74,25 +74,27 @@ CREATE TABLE IF NOT EXISTS invoices (
     vat_rate       NUMERIC(6, 4) NOT NULL DEFAULT 0
 );
 
-CREATE TABLE IF NOT EXISTS invoice_lines (
-    invoice_id TEXT NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS billing_lines (
+    billing_id TEXT NOT NULL REFERENCES billings(id) ON DELETE CASCADE,
     goods_id   TEXT NOT NULL REFERENCES goods(id),
     name       TEXT NOT NULL,
     price      NUMERIC(20, 4) NOT NULL CHECK (price > 0),
     cost       NUMERIC(20, 4) NOT NULL DEFAULT 0,
     qty        INTEGER NOT NULL CHECK (qty > 0),
-    PRIMARY KEY (invoice_id, goods_id)
+    PRIMARY KEY (billing_id, goods_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_members_user ON shop_members (user_id);
 CREATE INDEX IF NOT EXISTS idx_goods_shop ON goods (shop_id);
 CREATE INDEX IF NOT EXISTS idx_destinations_shop ON destinations (shop_id);
 CREATE INDEX IF NOT EXISTS idx_invites_shop ON invites (shop_id);
-CREATE INDEX IF NOT EXISTS idx_invoices_shop ON invoices (shop_id);
-CREATE INDEX IF NOT EXISTS idx_lines_invoice ON invoice_lines (invoice_id);
+CREATE INDEX IF NOT EXISTS idx_billings_shop ON billings (shop_id);
+CREATE INDEX IF NOT EXISTS idx_lines_billing ON billing_lines (billing_id);
 
--- 008: SOL->THB rate for PromptPay QR amounts (column folded into the
--- CREATE TABLE above for idempotency)
+-- 008: PromptPay THB rate — renamed in 016 to fx_thb_per_usd (THB per
+-- USD/USDT swap rate; goods are priced in the shop currency). Column folded
+-- into the CREATE TABLE above for idempotency; existing local D1 databases
+-- need `ALTER TABLE shops RENAME COLUMN fx_thb_per_sol TO fx_thb_per_usd`.
 
 -- 009: wallet auth + subscriptions + payment orders + storage accounting
 -- (wallet column folded into the users CREATE TABLE above for idempotency)
@@ -162,3 +164,7 @@ CREATE TABLE IF NOT EXISTS storage_usage (
 -- folded into the shops CREATE TABLE above for idempotency.
 -- (the ALTER TABLE ADD COLUMN was removed — it broke fresh-DB init with
 -- "duplicate column name: currency" since the CREATE above already has it)
+
+-- 017: shop currency default flips to 'usdt' (new shops price in USD; the
+-- default lives in the shops CREATE above — SQLite keeps column defaults in
+-- the schema, so fresh DBs already use 'usdt' via the updated CREATE).

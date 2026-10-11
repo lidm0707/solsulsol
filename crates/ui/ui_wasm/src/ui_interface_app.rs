@@ -3,10 +3,10 @@
 use dioxus::prelude::*;
 use gloo_timers::future::TimeoutFuture;
 use pos_api::schema::{
-    AddDestinationRequest, AddGoodsRequest, AuthNonceRequest, AuthVerifyRequest, Chain,
-    CheckoutRequest, CreatePaymentOrderRequest, CreateShopRequest, Currency, PaymentOrderResponse,
-    SplToken, SubscriptionResponse, SubscriptionStatusApi, UpdateShopSettingsRequest, VatMode,
-    VerifyPaymentRequest,
+    AddDestinationRequest, AddGoodsRequest, AuthNonceRequest, AuthVerifyRequest, BillingPeriodApi,
+    Chain, CheckoutRequest, CreatePaymentOrderRequest, CreateShopRequest, Currency,
+    PaymentOrderResponse, SplToken, StorageObjectResponse, SubscriptionResponse,
+    SubscriptionStatusApi, UpdateShopSettingsRequest, VatMode, VerifyPaymentRequest,
 };
 use reslt_core::prelude::*;
 use std::future::Future;
@@ -32,24 +32,46 @@ const HELD_BILL_MAX: usize = 8;
 const HELD_LABEL_PREFIX: &str = "Bill";
 const HELD_ITEMS_SUFFIX: &str = "items";
 const HELD_STRIP_LABEL: &str = "held";
-const SUB_PRICE_LABEL: &str = "$1/month";
+const SUB_PRICE_MONTHLY_LABEL: &str = "$1/month";
+const SUB_PRICE_YEARLY_LABEL: &str = "$10/year";
+const SUB_PLAN_MONTHLY_LABEL: &str = "Monthly $1";
+const SUB_PLAN_YEARLY_LABEL: &str = "Yearly $10";
+const SUB_ACTIVE_UNTIL_LABEL: &str = "Active until";
 const SUB_PACKAGE_LABEL: &str = "1 shop · 30 goods · 10 MB storage";
-const SUB_DELETE_POLICY: &str = "Data is deleted 30 days after expiration — renew within the 7-day recovery window to keep your shop.";
+const SUB_DELETE_POLICY: &str = "Data is deleted 14 days after expiration — renew within the 7-day recovery window to keep your shop.";
 const SUB_GRACE_MSG: &str =
-    "Subscription expired — renew within 30 days or your shop data will be deleted";
+    "Subscription expired — renew within 7 days or your shop will be locked";
+const SUB_NEAR_EXPIRY_DAYS: i64 = 3;
+const SUB_EXPIRING_PREFIX: &str = "Subscription expires in ";
+const SUB_EXPIRING_SUFFIX: &str = " day(s) — renew in Settings";
+const BANNER_EXPIRING: &str = "banner expiring";
 const SUB_LAPSED_MSG: &str =
     "Subscription lapsed — data may have been deleted. Contact support to recover.";
+const SUB_LOCKED_MSG: &str = "Shop locked — subscription lapsed. Renew to regain access";
 const SUB_GATE_MSG: &str = "Active subscription required — pay below to enter your shop";
 const SUB_CONFIRMED_MSG: &str = "Payment confirmed — subscription active";
 const SUB_PENDING_MSG: &str = "Waiting for payment…";
 const SUB_CONFIRMING_MSG: &str = "Verifying payment…";
+const SHOPS_QUOTA_FULL_LABEL: &str = "Shop quota full";
+const NO_SHOPS_QUOTA: usize = 0;
 const SUB_SIG_PLACEHOLDER: &str = "paste transaction signature after paying";
 const SUB_VERIFY_LABEL: &str = "Verify payment";
 const SUB_COPY_LABEL: &str = "copy";
 const SUB_MERCHANT_LABEL: &str = "Pay this USDC transfer, then verify:";
+const GOODS_NAME_REQUIRED_MSG: &str = "name is required";
+const GOODS_NUMBER_INVALID_MSG: &str = "price, cost and units must be valid numbers";
+const GOODS_MANAGE_TITLE: &str = "Manage";
+const GOODS_DELETE_LABEL: &str = "delete";
+const STORAGE_TITLE: &str = "Storage";
+const STORAGE_REFRESH_LABEL: &str = "Refresh";
+const STORAGE_EMPTY_MSG: &str = "no storage objects yet";
+const KEY_SHORT_LEN: usize = 8;
+const BYTES_PER_KB: f64 = 1024.0;
+const BYTE_UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
 const HTTP_FORBIDDEN: &str = "http 403";
 const TRUNCATE_ADDR: usize = 4;
 const BYTES_PER_MB: i64 = 1024 * 1024;
+const TOKEN_AMOUNT_DP: u32 = 5;
 
 /// API base: `?api=<url>` query param overrides the default (used by e2e).
 fn api_base() -> String {
@@ -193,6 +215,92 @@ const ICON_KEYS: &[&str] = &[
     "ticket",
     "wrench",
     "star",
+];
+
+const GOODS_ICON_CHOICES: &[(&str, &str)] = &[
+    ("package", "Package"),
+    ("cart", "Cart"),
+    ("coffee", "Coffee"),
+    ("burger", "Burger"),
+    ("pizza", "Pizza"),
+    ("soda", "Soda"),
+    ("water", "Water"),
+    ("beer", "Beer"),
+    ("bread", "Bread"),
+    ("cake", "Cake"),
+    ("rice", "Rice"),
+    ("noodle", "Noodle"),
+    ("apple", "Apple"),
+    ("carrot", "Carrot"),
+    ("meat", "Meat"),
+    ("fish", "Fish"),
+    ("milk", "Milk"),
+    ("egg", "Egg"),
+    ("candy", "Candy"),
+    ("icecream", "Ice cream"),
+    ("shirt", "Shirt"),
+    ("hat", "Hat"),
+    ("shoe", "Shoe"),
+    ("bag", "Bag"),
+    ("gift", "Gift"),
+    ("phone", "Phone"),
+    ("laptop", "Laptop"),
+    ("headphone", "Headphone"),
+    ("camera", "Camera"),
+    ("book", "Book"),
+    ("pen", "Pen"),
+    ("flower", "Flower"),
+    ("dog", "Dog"),
+    ("cat", "Cat"),
+    ("pill", "Pill"),
+    ("soap", "Soap"),
+    ("gas", "Gas"),
+    ("ticket", "Ticket"),
+    ("wrench", "Wrench"),
+    ("star", "Star"),
+];
+
+const GOODS_COLOR_CHOICES: &[(&str, &str)] = &[
+    ("c01", "Rose"),
+    ("c02", "Peach"),
+    ("c03", "Lemon"),
+    ("c04", "Lime"),
+    ("c05", "Aqua"),
+    ("c06", "Sky"),
+    ("c07", "Lavender"),
+    ("c08", "Orchid"),
+    ("c09", "Shell"),
+    ("c10", "Cream"),
+    ("c11", "Apricot"),
+    ("c12", "Coral"),
+    ("c13", "Snow"),
+    ("c14", "Blush"),
+    ("c15", "Linen"),
+    ("c16", "Sage"),
+    ("c17", "Fog"),
+    ("c18", "Bone"),
+    ("c19", "Fern"),
+    ("c20", "Olive"),
+    ("c21", "Straw"),
+    ("c22", "Aloe"),
+    ("c23", "Petal"),
+    ("c24", "Bubblegum"),
+    ("c25", "Salmon"),
+    ("c26", "Sand"),
+    ("c27", "Celery"),
+    ("c28", "Seafoam"),
+    ("c29", "Periwinkle"),
+    ("c30", "Rosewater"),
+    ("c31", "Spearmint"),
+    ("c32", "Baby blue"),
+    ("c33", "Lilac"),
+    ("c34", "Melon"),
+    ("c35", "Butter"),
+    ("c36", "Powder"),
+    ("c37", "Iris"),
+    ("c38", "Honey"),
+    ("c39", "Moss"),
+    ("c40", "Flamingo"),
 ];
 
 const ICON_PATHS: &[&str] = &[
@@ -367,6 +475,37 @@ const CAMERA_VIDEO_ID: &str = "scan-video";
 const SCAN_INTERVAL_MS: u32 = 250;
 const MOUNT_RETRY_MS: u32 = 100;
 
+const BARCODE_VIDEO_ID: &str = "barcode-video";
+const BARCODE_FMT_AUTO: &str = "auto";
+const BARCODE_AUTO_LABEL: &str = "Auto-detect";
+const BARCODE_SCAN_START_LABEL: &str = "Scan";
+const BARCODE_OK_PREFIX: &str = "\u{2713} valid: ";
+const FIELD_LABEL_PRICE: &str = "Price";
+const FIELD_LABEL_COST: &str = "Cost";
+const FIELD_LABEL_UNITS: &str = "Units";
+const FIELD_LABEL_ICON: &str = "Icon";
+const FIELD_LABEL_COLOR: &str = "Color";
+const FIELD_LABEL_BARCODE: &str = "Barcode (scan or type)";
+const UNITS_HINT: &str = "units 0 = stock not tracked";
+const BARCODE_FORMAT_CHOICES: &[(&str, &str)] = &[
+    ("auto", BARCODE_AUTO_LABEL),
+    ("ean13", "EAN-13"),
+    ("ean8", "EAN-8"),
+    ("upca", "UPC-A"),
+    ("code39", "Code39"),
+];
+
+fn barcode_format_parse(key: &str) -> Option<pos_barcode::format::BarcodeFormat> {
+    use pos_barcode::format::BarcodeFormat;
+    match key {
+        "ean13" => Some(BarcodeFormat::Ean13),
+        "ean8" => Some(BarcodeFormat::Ean8),
+        "upca" => Some(BarcodeFormat::UpcA),
+        "code39" => Some(BarcodeFormat::Code39),
+        _ => None,
+    }
+}
+
 fn add_by_barcode(
     goods: &[pos_api::schema::GoodsResponse],
     code: &str,
@@ -428,6 +567,45 @@ async fn run_camera_scanner(
     camera_on.set(false);
 }
 
+async fn run_barcode_capture(
+    mut camera_on: Signal<bool>,
+    mut barcode: Signal<String>,
+    mut toast: UseToast,
+) {
+    let video = loop {
+        match web_sys::window()
+            .and_then(|w| w.document())
+            .and_then(|d| d.get_element_by_id(BARCODE_VIDEO_ID))
+            .and_then(|e| e.dyn_into::<HtmlVideoElement>().ok())
+        {
+            Some(v) => break v,
+            None => TimeoutFuture::new(MOUNT_RETRY_MS).await,
+        }
+    };
+    let scanner = match Scanner::start(&video).await {
+        Ok(s) => s,
+        Err(_) => {
+            camera_on.set(false);
+            notify(&mut toast, CAMERA_ERROR_MSG, true);
+            return;
+        }
+    };
+    while *camera_on.peek() {
+        TimeoutFuture::new(SCAN_INTERVAL_MS).await;
+        let Some(raw) = scanner.read_once(&video).await else {
+            continue;
+        };
+        let code = pos_barcode::format::normalize(&raw);
+        if code.is_empty() {
+            continue;
+        }
+        barcode.set(code);
+        break;
+    }
+    scanner.stop();
+    camera_on.set(false);
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum PayState {
     Idle,
@@ -474,7 +652,7 @@ impl SettingsGroup {
                 SettingsSection::AddAccount,
                 SettingsSection::Tax,
             ],
-            Self::Usage => &[SettingsSection::Usage],
+            Self::Usage => &[SettingsSection::Usage, SettingsSection::Storage],
         }
     }
 }
@@ -486,6 +664,7 @@ enum SettingsSection {
     AddAccount,
     Tax,
     Usage,
+    Storage,
 }
 
 impl SettingsSection {
@@ -496,6 +675,7 @@ impl SettingsSection {
             Self::AddAccount => "section-add-account",
             Self::Tax => "section-tax",
             Self::Usage => "section-usage",
+            Self::Storage => "section-storage",
         }
     }
     fn label(self) -> &'static str {
@@ -505,6 +685,7 @@ impl SettingsSection {
             Self::AddAccount => "Add account",
             Self::Tax => "Tax / VAT",
             Self::Usage => "Usage",
+            Self::Storage => "Storage",
         }
     }
 }
@@ -732,7 +913,7 @@ fn AuthView(token: Signal<Option<String>>, base: String) -> Element {
                         }
                         button {
                             class: "btn primary full",
-                            disabled: "{busy} {wallet.busy}",
+                            disabled: busy() || *wallet.busy.read(),
                             onclick: on_sign_in,
                             if busy() { "…" } else { "Sign In" }
                         }
@@ -766,14 +947,15 @@ fn AuthView(token: Signal<Option<String>>, base: String) -> Element {
 
 const SUB_GATE_TITLE: &str = "Subscription required";
 
+/// Enters the shop only when the fetched subscription is Active/Grace (and
+/// near expiry still warns). Unpaid → payment gate, no entry. Returns whether
+/// entry is allowed.
 async fn sub_gate_enter(
     base: String,
     token: Signal<Option<String>>,
     mut sub: Signal<Option<SubscriptionResponse>>,
-    mut shop_id: Signal<Option<Uuid>>,
     mut toast: UseToast,
     mut pay_gate: Signal<bool>,
-    sid: Uuid,
 ) -> bool {
     let client = FetchClient { base_url: base };
     match client
@@ -787,13 +969,20 @@ async fn sub_gate_enter(
             ) =>
         {
             sub.set(Some(s));
-            shop_id.set(Some(sid));
             true
         }
         Ok(s) => {
+            let locked = matches!(
+                s.status,
+                SubscriptionStatusApi::Lapsed | SubscriptionStatusApi::Deleted
+            );
             sub.set(Some(s));
             pay_gate.set(true);
-            notify(&mut toast, SUB_GATE_MSG, true);
+            notify(
+                &mut toast,
+                if locked { SUB_LOCKED_MSG } else { SUB_GATE_MSG },
+                true,
+            );
             false
         }
         Err(_) => {
@@ -808,11 +997,10 @@ async fn sub_gate_enter(
 fn Dashboard(token: Signal<Option<String>>, base: String) -> Element {
     use_modal_provider();
     let token_str = move || token().unwrap_or_default();
-    let shop_id = use_signal(|| Option::<Uuid>::None);
+    let mut shop_id = use_signal(|| Option::<Uuid>::None);
     let shops = use_signal(Vec::<pos_api::schema::ShopResponse>::new);
     let mut new_shop = use_signal(String::new);
     let mut sub = use_signal(|| Option::<SubscriptionResponse>::None);
-    let pending_shop = use_signal(|| Option::<Uuid>::None);
     let mut gate_shop = use_signal(|| Option::<Uuid>::None);
     let modal = use_modal();
     let toast = use_toast();
@@ -855,6 +1043,11 @@ fn Dashboard(token: Signal<Option<String>>, base: String) -> Element {
             Some(SubscriptionStatusApi::Active) | Some(SubscriptionStatusApi::Grace)
         )
     };
+    let quota_full = move || {
+        let quota = sub().map(|s| s.shops_quota).unwrap_or(NO_SHOPS_QUOTA);
+        quota > NO_SHOPS_QUOTA
+            && (shops().len() >= quota || sub().is_some_and(|s| s.shops_used >= s.shops_quota))
+    };
     let gate_base = base.clone();
     let gate_toast = toast.clone();
     let mut pay_gate = use_signal(|| false);
@@ -862,93 +1055,43 @@ fn Dashboard(token: Signal<Option<String>>, base: String) -> Element {
     let effect_toast = gate_toast.clone();
     use_effect(move || {
         let Some(sid) = gate_shop() else { return };
-        gate_shop.set(None);
-        let mut gate_pending = pending_shop;
         let enter_base = effect_base.clone();
         let enter_toast = effect_toast.clone();
         spawn(async move {
-            let entered =
-                sub_gate_enter(enter_base, token, sub, shop_id, enter_toast, pay_gate, sid).await;
-            gate_pending.set(if entered { None } else { Some(sid) });
+            if sub_gate_enter(enter_base, token, sub, enter_toast, pay_gate).await {
+                shop_id.set(Some(sid));
+                gate_shop.set(None);
+            }
         });
     });
     let confirm_base = base.clone();
     let confirm_toast = toast.clone();
     let confirm_modal = modal.clone();
-    let confirm_form_base = base.clone();
-    let confirm_gate_base = base.clone();
-    let confirm_gate_toast = toast.clone();
     let on_confirmed = move |_| {
-        if let Some(sid) = pending_shop() {
-            let mut modal = confirm_modal.clone();
-            modal.close();
-            let mut gate_pending = pending_shop;
-            let enter_base = gate_base.clone();
-            let enter_toast = gate_toast.clone();
-            spawn(async move {
-                let entered =
-                    sub_gate_enter(enter_base, token, sub, shop_id, enter_toast, pay_gate, sid)
-                        .await;
-                gate_pending.set(if entered { None } else { Some(sid) });
-            });
-        } else {
-            let client = FetchClient {
-                base_url: confirm_base.clone(),
-            };
-            let mut modal = confirm_modal.clone();
-            let mut toast = confirm_toast.clone();
-            let form_base = confirm_form_base.clone();
-            let form_gate_base = confirm_gate_base.clone();
-            let form_gate_toast = confirm_gate_toast.clone();
-            spawn(async move {
-                match client
-                    .subscription_current(&token().unwrap_or_default())
-                    .await
-                {
-                    Ok(s)
-                        if matches!(
-                            s.status,
-                            SubscriptionStatusApi::Active | SubscriptionStatusApi::Grace
-                        ) =>
-                    {
-                        sub.set(Some(s));
-                        notify(&mut toast, SUB_CONFIRMED_MSG, false);
-                        modal.set_title("New shop");
-                        modal.set_content(rsx! {
-                            ShopForm {
-                                token,
-                                base: form_base,
-                                shops,
-                                name: new_shop,
-                                on_created: move |sid: Uuid| {
-                                    if sub_is_active() {
-                                        return;
-                                    }
-                                    let mut gate_pending = pending_shop;
-                                    let enter_base = form_gate_base.clone();
-                                    let enter_toast = form_gate_toast.clone();
-                                    spawn(async move {
-                                        let entered = sub_gate_enter(
-                                            enter_base,
-                                            token,
-                                            sub,
-                                            shop_id,
-                                            enter_toast,
-                                            pay_gate,
-                                            sid,
-                                        )
-                                        .await;
-                                        gate_pending.set(if entered { None } else { Some(sid) });
-                                    });
-                                },
-                            }
-                        });
+        // Payment confirmed: refresh the subscription, then enter the shop that
+        // was waiting behind the gate (if any).
+        let client = FetchClient {
+            base_url: confirm_base.clone(),
+        };
+        let mut modal = confirm_modal.clone();
+        let mut toast = confirm_toast.clone();
+        spawn(async move {
+            match client
+                .subscription_current(&token().unwrap_or_default())
+                .await
+            {
+                Ok(s) => {
+                    sub.set(Some(s));
+                    notify(&mut toast, SUB_CONFIRMED_MSG, false);
+                    if let Some(sid) = gate_shop() {
+                        gate_shop.set(None);
+                        shop_id.set(Some(sid));
                     }
-                    Ok(s) => sub.set(Some(s)),
-                    Err(e) => notify(&mut toast, &e, true),
+                    modal.close();
                 }
-            });
-        }
+                Err(e) => notify(&mut toast, &e, true),
+            }
+        });
     };
     let pay_effect_modal = modal.clone();
     let pay_effect_base = base.clone();
@@ -972,59 +1115,30 @@ fn Dashboard(token: Signal<Option<String>>, base: String) -> Element {
 
     let open_create = {
         let create_base = base.clone();
-        let create_gate_base = base.clone();
-        let create_gate_toast = toast.clone();
-        let create_confirmed = on_confirmed.clone();
         move |_| {
             let mut modal = modal.clone();
             new_shop.set(String::new());
-            if sub_is_active() {
-                let form_gate_base = create_gate_base.clone();
-                let form_gate_toast = create_gate_toast.clone();
-                modal.set_title("New shop");
-                modal.set_content(rsx! {
-                    ShopForm {
-                        token,
-                        base: create_base.clone(),
-                        shops,
-                        name: new_shop,
-                        on_created: move |sid: Uuid| {
-                            if sub_is_active() {
-                                return;
-                            }
-                            let mut gate_pending = pending_shop;
-                            let enter_base = form_gate_base.clone();
-                            let enter_toast = form_gate_toast.clone();
-                            spawn(async move {
-                                let entered = sub_gate_enter(
-                                    enter_base,
-                                    token,
-                                    sub,
-                                    shop_id,
-                                    enter_toast,
-                                    pay_gate,
-                                    sid,
-                                )
-                                .await;
-                                gate_pending.set(if entered { None } else { Some(sid) });
-                            });
-                        },
-                    }
-                });
-                modal.open();
-            } else {
-                let mut gate_pending = pending_shop;
-                gate_pending.set(None);
-                modal.set_title(SUB_GATE_TITLE);
-                modal.set_content(rsx! {
-                    SubscriptionView {
-                        token: token_str(),
-                        base: create_base.clone(),
-                        on_confirmed: create_confirmed.clone(),
-                    }
-                });
-                modal.open();
-            }
+            // Creation is free — the subscription gate shows after entering.
+            modal.set_title("New shop");
+            modal.set_content(rsx! {
+                ShopForm {
+                    token,
+                    base: create_base.clone(),
+                    shops,
+                    name: new_shop,
+                    on_created: move |sid: Uuid| {
+                        // Active: straight in. Otherwise the gate effect opens
+                        // the payment modal and keeps sid pending for entry
+                        // after payment.
+                        if sub_is_active() {
+                            shop_id.set(Some(sid));
+                        } else {
+                            gate_shop.set(Some(sid));
+                        }
+                    },
+                }
+            });
+            modal.open();
         }
     };
 
@@ -1051,10 +1165,15 @@ fn Dashboard(token: Signal<Option<String>>, base: String) -> Element {
                         }
                     }
                     button {
-                        class: "btn primary full",
+                        class: if quota_full() { "btn full" } else { "btn primary full" },
                         "aria-label": "new-shop",
+                        disabled: quota_full(),
                         onclick: open_create,
-                        "+ New shop"
+                        if quota_full() {
+                            "{SHOPS_QUOTA_FULL_LABEL}"
+                        } else {
+                            "+ New shop"
+                        }
                     }
                 }
             }
@@ -1076,6 +1195,7 @@ fn ShopForm(
 ) -> Element {
     let modal = use_modal();
     let toast = use_toast();
+    let busy = use_signal(|| false);
     rsx! {
         div { class: "stack",
             input {
@@ -1087,14 +1207,17 @@ fn ShopForm(
             button {
                 class: "btn primary full",
                 "aria-label": "create-shop",
+                disabled: busy(),
                 onclick: move |_| {
                     let client = FetchClient { base_url: base.clone() };
                     let token = token;
                     let mut shops = shops;
                     let mut toast = toast.clone();
                     let mut modal = modal.clone();
+                    let mut busy = busy;
                     let shop_name = name.read().clone();
                     spawn(async move {
+                        busy.set(true);
                         match client.create_shop(&token().unwrap_or_default(), &CreateShopRequest { name: shop_name }).await {
                             Ok(shop) => {
                                 if let Ok(s) = client.list_shops(&token().unwrap_or_default()).await { shops.set(s); }
@@ -1103,9 +1226,10 @@ fn ShopForm(
                             }
                             Err(e) => notify(&mut toast, &e, true),
                         }
+                        busy.set(false);
                     });
                 },
-                "Create shop"
+                if busy() { "…" } else { "Create shop" }
             }
         }
     }
@@ -1119,6 +1243,24 @@ fn ShopPanel(
     token_signal: Signal<Option<String>>,
 ) -> Element {
     let mut tab = use_signal(|| Tab::Sell);
+    let me = use_signal(|| Option::<pos_api::schema::MeResponse>::None);
+    {
+        let me_base = base.clone();
+        let me_token = token.clone();
+        let mut me = me;
+        use_future(move || {
+            let client = FetchClient {
+                base_url: me_base.clone(),
+            };
+            let token = me_token.clone();
+            async move {
+                if let Ok(m) = client.auth_me(&token).await {
+                    me.set(Some(m));
+                }
+            }
+        });
+    }
+    let is_admin = me().is_some_and(|m| is_admin_role(m.role));
     rsx! {
         div { class: "panel",
             Header { token_signal, base: base.clone() }
@@ -1126,9 +1268,9 @@ fn ShopPanel(
                 SubBanner { token: token.clone(), base: base.clone() }
                 match tab() {
                     Tab::Sell => rsx! { SellTab { token, base, shop_id } },
-                    Tab::Goods => rsx! { GoodsTab { token, base, shop_id } },
+                    Tab::Goods => rsx! { GoodsTab { token, base, shop_id, is_admin } },
                     Tab::Reports => rsx! { ReportsTab { token, base, shop_id } },
-                    Tab::Settings => rsx! { SettingsTab { token, base, shop_id } },
+                    Tab::Settings => rsx! { SettingsTab { token, base, shop_id, is_admin } },
                 }
             }
             nav { class: "tabbar",
@@ -1156,11 +1298,14 @@ fn Header(token_signal: Signal<Option<String>>, base: String) -> Element {
                 "aria-label": "logout",
                 onclick: move |_| {
                     let client = FetchClient { base_url: base.clone() };
+                    let auth_token = token_signal.read().clone().unwrap_or_default();
                     let mut token = token_signal;
                     let mut toast = toast.clone();
                     token.set(None);
                     spawn(async move {
-                        if let Err(e) = client.auth_logout(&token().unwrap_or_default()).await {
+                        if !auth_token.is_empty()
+                            && let Err(e) = client.auth_logout(&auth_token).await
+                        {
                             notify(&mut toast, &e, true);
                         }
                     });
@@ -1203,7 +1348,7 @@ fn ModalHost() -> Element {
 
 #[derive(Clone, PartialEq)]
 struct Charge {
-    invoice: pos_api::schema::InvoiceResponse,
+    billing: pos_api::schema::BillingResponse,
     expires_at: i64,
     pdf_url: String,
 }
@@ -1217,7 +1362,7 @@ fn SellTab(token: String, base: String, shop_id: Uuid) -> Element {
     let modal = use_modal();
     let mut now = use_signal(now_ms);
     let mut view = use_signal(|| SaleView::New);
-    let mut docs = use_signal(Vec::<pos_api::schema::InvoiceResponse>::new);
+    let mut docs = use_signal(Vec::<pos_api::schema::BillingResponse>::new);
     let mut held = use_signal(Vec::<Vec<Uuid>>::new);
     let mut scan_input = use_signal(String::new);
     let mut camera_on = use_signal(|| false);
@@ -1232,6 +1377,7 @@ fn SellTab(token: String, base: String, shop_id: Uuid) -> Element {
     });
     let mut toast = use_toast();
     let scan_toast = toast.clone();
+    let docs_toast = toast.clone();
 
     let base_future = base.clone();
     let token_future = token.clone();
@@ -1271,13 +1417,18 @@ fn SellTab(token: String, base: String, shop_id: Uuid) -> Element {
     let subtotal: rust_decimal::Decimal = picked.iter().map(|g| g.price).sum();
     let shop_cfg = shop();
     let (vat_mode, vat_rate, fx, shop_currency) = shop_cfg
-        .map(|s| (s.vat_mode, s.vat_rate, s.fx_thb_per_sol, s.currency))
+        .map(|s| (s.vat_mode, s.vat_rate, s.fx_thb_per_usd, s.currency))
         .unwrap_or((
             pos_api::schema::VatMode::None,
             rust_decimal::Decimal::ZERO,
             rust_decimal::Decimal::ZERO,
-            pos_api::schema::Currency::Thb,
+            pos_api::schema::Currency::Usdt,
         ));
+    let sym = if shop_currency == pos_api::schema::Currency::Usdt {
+        "$"
+    } else {
+        "\u{0e3f}"
+    };
     let hundred = rust_decimal::Decimal::new(100, 0);
     let vat_amount = match vat_mode {
         pos_api::schema::VatMode::None => rust_decimal::Decimal::ZERO,
@@ -1310,9 +1461,6 @@ fn SellTab(token: String, base: String, shop_id: Uuid) -> Element {
     let destination_id = picked_destination()
         .filter(|id| destinations_now.iter().any(|d| &d.destination_id == id))
         .or_else(|| destinations_now.first().map(|d| d.destination_id));
-    let picked_chain = destination_id
-        .and_then(|id| destinations_now.iter().find(|d| d.destination_id == id))
-        .map(|d| d.chain);
 
     rsx! {
         div { class: "stack",
@@ -1331,9 +1479,11 @@ fn SellTab(token: String, base: String, shop_id: Uuid) -> Element {
                             view.set(SaleView::Docs);
                             let client = FetchClient { base_url: base.clone() };
                             let token = token.clone();
+                            let mut docs_toast = docs_toast.clone();
                             spawn(async move {
-                                if let Ok(d) = client.list_invoices(&token, shop_id).await {
-                                    docs.set(d);
+                                match client.list_billings(&token, shop_id).await {
+                                    Ok(d) => docs.set(d),
+                                    Err(e) => notify(&mut docs_toast, &e, true),
                                 }
                             });
                         },
@@ -1471,10 +1621,7 @@ fn SellTab(token: String, base: String, shop_id: Uuid) -> Element {
                                         span { class: "dim small", "{b}" }
                                     }
                                     span { class: "goods-meta",
-                                        span { class: "goods-price", "◎ {g.price}" }
-                                        if shop_currency == pos_api::schema::Currency::Thb && fx > rust_decimal::Decimal::ZERO {
-                                            span { class: "dim small", "\u{0e3f}{(g.price * fx).round_dp(2).normalize()}" }
-                                        }
+                                        span { class: "goods-price", "{sym} {g.price}" }
                                         if g.units > 0 {
                                             span { class: if g.units <= LOW_STOCK { "unit-chip warn" } else { "unit-chip" }, "x{g.units}" }
                                         }
@@ -1490,7 +1637,8 @@ fn SellTab(token: String, base: String, shop_id: Uuid) -> Element {
                     div { class: "total-bar",
                         if vat_mode != pos_api::schema::VatMode::None {
                             span { class: "dim small",
-                                "Subtotal \u{25c8}{subtotal} \u{00b7} VAT {vat_rate.normalize()}% \u{25c8}{vat_amount}" }
+                                "Subtotal {sym}{subtotal.normalize()} \u{00b7} VAT {vat_rate.normalize()}% {sym}{vat_amount.normalize()}"
+                            }
                         }
                         if destinations().len() > 1 {
                             select {
@@ -1501,18 +1649,12 @@ fn SellTab(token: String, base: String, shop_id: Uuid) -> Element {
                                     picked_destination.set(e.value().parse::<Uuid>().ok());
                                 },
                                 for d in destinations().iter().cloned() {
-                                    option { value: "{d.destination_id}", "{chain_label(d.chain)} · {truncate(&d.address, 8)}" }
+                                    option { value: "{d.destination_id}", "{dest_label(&d)}" }
                                 }
                             }
                         }
                         span { "Total" }
-                        span {
-                            class: "pay-total small-total",
-                            if shop_currency == pos_api::schema::Currency::Usdt || fx <= rust_decimal::Decimal::ZERO { "\u{25c8} {total}" } else { "\u{0e3f}{(total * fx).round_dp(2)}" }
-                        }
-                        if picked_chain == Some(pos_api::schema::Chain::Bank) && fx > rust_decimal::Decimal::ZERO {
-                            span { class: "dim small", "\u{2248} \u{0e3f}{(total * fx).round_dp(2)}" }
-                        }
+                        span { class: "pay-total small-total", "{sym} {total.normalize()}" }
                     }
                 }
                 button {
@@ -1547,6 +1689,7 @@ fn SellTab(token: String, base: String, shop_id: Uuid) -> Element {
                                     goods_ids,
                                     destinations: destinations.read().clone(),
                                     total,
+                                    currency: shop_currency,
                                     fx,
                                     selected_goods,
                                     goods,
@@ -1562,7 +1705,7 @@ fn SellTab(token: String, base: String, shop_id: Uuid) -> Element {
                 }
                     },
                     SaleView::Docs => rsx! {
-                        DocumentsList { docs, base: base.clone() }
+                        DocumentsList { docs, base: base.clone(), sym, charge, now }
                     },
                 }
             }
@@ -1571,7 +1714,15 @@ fn SellTab(token: String, base: String, shop_id: Uuid) -> Element {
 }
 
 #[component]
-fn DocumentsList(docs: Signal<Vec<pos_api::schema::InvoiceResponse>>, base: String) -> Element {
+fn DocumentsList(
+    docs: Signal<Vec<pos_api::schema::BillingResponse>>,
+    base: String,
+    sym: &'static str,
+    charge: Signal<Option<Charge>>,
+    now: Signal<i64>,
+) -> Element {
+    let modal = use_modal();
+    let show = move |v: rust_decimal::Decimal| format!("{sym}{}", v.round_dp(2).normalize());
     rsx! {
         div { class: "stack",
             h2 { class: "page-title", "{SaleView::DOCS_LABEL}" }
@@ -1580,10 +1731,31 @@ fn DocumentsList(docs: Signal<Vec<pos_api::schema::InvoiceResponse>>, base: Stri
                     div { class: "list-row",
                         div { class: "goods-col",
                             span { class: "goods-name", {inv.lines.first().map(|l| l.name.clone()).unwrap_or_default()} }
-                            span { class: "dim small", "{chain_label(inv.destination.chain)} · margin ◎{inv.total - inv.cost}" }
+                            span { class: "dim small", "{chain_label(inv.destination.chain)} · margin {show(inv.total - inv.cost)}" }
                         }
                         div { class: "goods-col right",
-                            span { class: "goods-price", "◎ {inv.total}" }
+                            span { class: "goods-price", "{show(inv.total)}" }
+                            button {
+                                class: "dim small pdf-link",
+                                "aria-label": "show-qr",
+                                onclick: {
+                                    let billing = inv.clone();
+                                    let base = base.clone();
+                                    let mut modal = modal.clone();
+                                    move |_| {
+                                        let pdf_url = format!("{}{}", base.trim_end_matches('/'), billing.pdf_url);
+                                        charge.set(Some(Charge {
+                                            billing: billing.clone(),
+                                            expires_at: now_ms() + QR_TTL_MS,
+                                            pdf_url,
+                                        }));
+                                        modal.set_title(BILLING_TITLE);
+                                        modal.set_content(rsx! { QrModalContent { charge, now } });
+                                        modal.open();
+                                    }
+                                },
+                                "QR"
+                            }
                             a { class: "dim small pdf-link", href: "{base}{inv.pdf_url}", target: "_blank", "PDF" }
                         }
                     }
@@ -1604,6 +1776,7 @@ fn MethodSelect(
     goods_ids: Vec<Uuid>,
     destinations: Vec<pos_api::schema::DestinationResponse>,
     total: rust_decimal::Decimal,
+    currency: pos_api::schema::Currency,
     fx: rust_decimal::Decimal,
     selected_goods: Signal<Vec<Uuid>>,
     goods: Signal<Vec<pos_api::schema::GoodsResponse>>,
@@ -1612,13 +1785,26 @@ fn MethodSelect(
     picked_destination: Signal<Option<Uuid>>,
 ) -> Element {
     let modal = use_modal();
-    let thb = (total * fx).round_dp(2).normalize();
+    let sym = if currency == pos_api::schema::Currency::Usdt {
+        "$"
+    } else {
+        "\u{0e3f}"
+    };
+    let bank_amount =
+        if currency == pos_api::schema::Currency::Usdt && fx > rust_decimal::Decimal::ZERO {
+            (total * fx).round_dp(2).normalize()
+        } else {
+            total.normalize()
+        };
+    let token_amount =
+        if currency == pos_api::schema::Currency::Thb && fx > rust_decimal::Decimal::ZERO {
+            (total / fx).round_dp(TOKEN_AMOUNT_DP).normalize()
+        } else {
+            total.normalize()
+        };
     rsx! {
         div { class: "stack",
-            div { class: "pay-total", "◎ {total.normalize()} SOL" }
-            if fx > rust_decimal::Decimal::ZERO {
-                p { class: "dim small", "≈ \u{0e3f}{thb} · live rate" }
-            }
+            div { class: "pay-total", "{sym} {total.normalize()}" }
             div { class: "method-sheet",
                 for d in destinations.iter().cloned() {
                     {
@@ -1629,7 +1815,11 @@ fn MethodSelect(
                         let tile_token = token.clone();
                         let tile_goods_ids = goods_ids.clone();
                         let is_bank = chain == pos_api::schema::Chain::Bank;
-                        let amount = if is_bank && fx > rust_decimal::Decimal::ZERO { format!("\u{0e3f}{thb}") } else { format!("◎ {} SOL", total.normalize()) };
+                        let amount = if is_bank {
+                            format!("\u{0e3f}{bank_amount}")
+                        } else {
+                            format!("{token_amount} {}", token_label(d.token))
+                        };
                         rsx! {
                             button {
                                 class: "method-tile",
@@ -1707,7 +1897,7 @@ fn CheckoutContent(
                     }
                     let pdf_url = format!("{}{}", base.trim_end_matches('/'), inv.pdf_url);
                     charge.set(Some(Charge {
-                        invoice: inv,
+                        billing: inv,
                         expires_at: now_ms() + QR_TTL_MS,
                         pdf_url,
                     }));
@@ -1756,7 +1946,7 @@ fn QrModalContent(charge: Signal<Option<Charge>>, now: Signal<i64>) -> Element {
 
 #[component]
 fn QrPay(charge: Charge, now_ms: Signal<i64>) -> Element {
-    let inv = &charge.invoice;
+    let inv = &charge.billing;
     let left = charge.expires_at - now_ms();
     let svg = qr_svg(&inv.qr_payload);
     let qr_el = match svg {
@@ -1764,16 +1954,16 @@ fn QrPay(charge: Charge, now_ms: Signal<i64>) -> Element {
         None => rsx! { p { class: "error", "QR render failed" } },
     };
     let pdf_url = charge.pdf_url.clone();
+    let token = token_label(inv.destination.token);
     rsx! {
         div { class: "card pay",
             if inv.destination.chain == pos_api::schema::Chain::Bank {
                 p { class: "pay-total", "\u{0e3f} {inv.qr_amount.normalize()}" }
-                p { class: "dim small", "\u{2248} \u{25c8}{inv.total} · PromptPay" }
             } else {
-                p { class: "pay-total", "◎ {inv.total} SOL" }
+                p { class: "pay-total", "{inv.qr_amount.normalize()} {token}" }
             }
             if inv.vat_mode != pos_api::schema::VatMode::None {
-                p { class: "dim small", "Subtotal ◎{inv.subtotal} · VAT {inv.vat_rate.normalize()}% ◎{inv.vat_amount}" }
+                p { class: "dim small", "Subtotal {inv.subtotal.normalize()} \u{00b7} VAT {inv.vat_rate.normalize()}% {inv.vat_amount.normalize()}" }
             }
             {qr_el}
             p { class: "pay-status",
@@ -1781,18 +1971,28 @@ fn QrPay(charge: Charge, now_ms: Signal<i64>) -> Element {
                 "waiting for payment"
             }
             p { class: if left < URGENCY_MS { "countdown urgent" } else { "countdown" }, "{fmt_remaining(left)}" }
-            p { class: "dim small", "scan to pay · {chain_label(inv.destination.chain)} {truncate(&inv.destination.address, 8)}" }
+            p { class: "dim small", "scan to pay · {chain_label(inv.destination.chain)}" }
             a { class: "btn ghost pdf-link", href: "{pdf_url}", target: "_blank", "Download PDF" }
         }
     }
 }
 
-fn sub_banner_text(sub: &SubscriptionResponse) -> Option<(&'static str, &'static str)> {
+fn sub_banner_text(sub: &SubscriptionResponse) -> Option<(&'static str, String)> {
     match sub.status {
-        SubscriptionStatusApi::Active => None,
-        SubscriptionStatusApi::Grace => Some(("banner warn", SUB_GRACE_MSG)),
+        SubscriptionStatusApi::Active => {
+            let expires = sub.expires_at?;
+            let days =
+                (expires.timestamp() - js_sys::Date::now() as i64 / 1000).div_euclid(86_400) + 1;
+            (days <= SUB_NEAR_EXPIRY_DAYS).then(|| {
+                (
+                    BANNER_EXPIRING,
+                    format!("{SUB_EXPIRING_PREFIX}{days}{SUB_EXPIRING_SUFFIX}"),
+                )
+            })
+        }
+        SubscriptionStatusApi::Grace => Some(("banner warn", SUB_GRACE_MSG.to_string())),
         SubscriptionStatusApi::Lapsed | SubscriptionStatusApi::Deleted => {
-            Some(("banner err", SUB_LAPSED_MSG))
+            Some(("banner err", SUB_LAPSED_MSG.to_string()))
         }
     }
 }
@@ -1863,8 +2063,6 @@ fn SubBanner(token: String, base: String) -> Element {
         div {
             if let Some((class, msg)) = sub_banner_text(&s) {
                 div { class: "{class}", "{msg}" }
-            } else if let Some(exp) = s.expires_at {
-                div { class: "banner ok", "Active until {fmt_local(exp)}" }
             }
         }
     }
@@ -1903,6 +2101,110 @@ fn QuotaUsage(token: String, base: String) -> Element {
     }
 }
 
+fn is_admin_role(role: pos_api::schema::Role) -> bool {
+    matches!(
+        role,
+        pos_api::schema::Role::SuperAdmin
+            | pos_api::schema::Role::Owner
+            | pos_api::schema::Role::Admin
+    )
+}
+
+fn fmt_bytes(bytes: i64) -> String {
+    let mut value = bytes as f64;
+    let mut unit = 0usize;
+    while value >= BYTES_PER_KB && unit < BYTE_UNITS.len() - 1 {
+        value /= BYTES_PER_KB;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes} {}", BYTE_UNITS[0])
+    } else {
+        format!("{value:.1} {}", BYTE_UNITS[unit])
+    }
+}
+
+fn short_key(key: Uuid) -> String {
+    let s = key.to_string();
+    String::from(&s[..KEY_SHORT_LEN.min(s.len())])
+}
+
+#[component]
+fn StorageView(token: String, base: String, shop_id: Uuid, is_admin: bool) -> Element {
+    let mut objects = use_signal(Vec::<StorageObjectResponse>::new);
+    let mut version = use_signal(|| 0u32);
+    let toast = use_toast();
+    let ver = version.read().to_owned();
+    let load_base = base.clone();
+    let load_token = token.clone();
+    let load_toast = toast.clone();
+    use_resource(use_reactive!(|(ver,)| {
+        let client = FetchClient {
+            base_url: load_base.clone(),
+        };
+        let token = load_token.clone();
+        let mut toast = load_toast.clone();
+        async move {
+            let _ = ver;
+            match client.list_storage_objects(&token, shop_id).await {
+                Ok(o) => objects.set(o),
+                Err(e) => notify(&mut toast, &e, true),
+            }
+        }
+    }));
+    let count = objects().len();
+    let total: i64 = objects().iter().map(|o| o.bytes).sum();
+    rsx! {
+        div { class: "stack",
+            div { class: "row split",
+                span { class: "dim small", "{count} objects · {fmt_bytes(total)}" }
+                button {
+                    class: "btn ghost",
+                    "aria-label": "refresh-storage",
+                    onclick: move |_| version += 1,
+                    "{STORAGE_REFRESH_LABEL}"
+                }
+            }
+            if count == 0 {
+                p { class: "dim pad", "{STORAGE_EMPTY_MSG}" }
+            }
+            for o in objects().iter().cloned() {
+                div { class: "row split",
+                    span { class: "mono small", "{short_key(o.key)}" }
+                    div { class: "row",
+                        span { class: "dim small", "{fmt_bytes(o.bytes)}" }
+                        if is_admin {
+                            button {
+                                class: "btn ghost",
+                                "aria-label": "delete-storage-{o.key}",
+                                onclick: {
+                                    let base = base.clone();
+                                    let token = token.clone();
+                                    let toast = toast.clone();
+                                    move |_| {
+                                        let client = FetchClient { base_url: base.clone() };
+                                        let token = token.clone();
+                                        let mut toast = toast.clone();
+                                        let mut version = version;
+                                        let key = o.key;
+                                        spawn(async move {
+                                            match client.delete_storage_object(&token, shop_id, key).await {
+                                                Ok(()) => version += 1,
+                                                Err(e) => notify(&mut toast, &e, true),
+                                            }
+                                        });
+                                    }
+                                },
+                                "{GOODS_DELETE_LABEL}"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[component]
 fn PayPending(
     recipient: String,
@@ -1912,9 +2214,14 @@ fn PayPending(
     on_verify: EventHandler,
 ) -> Element {
     let pay_url = format!("solana:{recipient}?amount={amount}&spl-token={mint}");
+    let svg = qr_svg(&pay_url);
     rsx! {
         div { class: "card stack",
             div { class: "pay-status", span { class: "pay-dot" } span { {SUB_PENDING_MSG} } }
+            match svg {
+                Some(svg) => rsx! { div { class: "qr", dangerous_inner_html: "{svg}" } },
+                None => rsx! { p { class: "error", "QR render failed" } },
+            }
             p { class: "dim small", {SUB_MERCHANT_LABEL} }
             div { class: "row split",
                 span { class: "mono small", "{truncate(&recipient, TRUNCATE_ADDR)}" }
@@ -1947,6 +2254,7 @@ fn SubscriptionView(token: String, base: String, on_confirmed: EventHandler) -> 
     let sub = use_signal(|| Option::<SubscriptionResponse>::None);
     let order = use_signal(|| Option::<PaymentOrderResponse>::None);
     let mut pay = use_signal(|| PayState::Idle);
+    let mut period = use_signal(|| BillingPeriodApi::Monthly);
     let pay_err = use_signal(String::new);
     let sig_input = use_signal(String::new);
     let busy = use_signal(|| false);
@@ -1983,7 +2291,13 @@ fn SubscriptionView(token: String, base: String, on_confirmed: EventHandler) -> 
         async move {
             busy.set(true);
             match client
-                .create_payment_order(&token, &CreatePaymentOrderRequest { renew })
+                .create_payment_order(
+                    &token,
+                    &CreatePaymentOrderRequest {
+                        renew,
+                        period: Some(period()),
+                    },
+                )
                 .await
             {
                 Ok(o) => {
@@ -2046,12 +2360,38 @@ fn SubscriptionView(token: String, base: String, on_confirmed: EventHandler) -> 
         sub().map(|s| s.status),
         Some(SubscriptionStatusApi::Active) | Some(SubscriptionStatusApi::Grace)
     );
+    let price_label = match period() {
+        BillingPeriodApi::Monthly => SUB_PRICE_MONTHLY_LABEL,
+        BillingPeriodApi::Yearly => SUB_PRICE_YEARLY_LABEL,
+    };
 
     rsx! {
         div { class: "stack",
             h2 { class: "page-title", "Subscription" }
             div { class: "card stack",
-                div { class: "pay-total", {SUB_PRICE_LABEL} }
+                if let Some(s) = sub() {
+                    div { class: "row split small dim",
+                        span { "{s.status:?}" }
+                        if let Some(exp) = s.expires_at {
+                            span { "{SUB_ACTIVE_UNTIL_LABEL} {fmt_local(exp)}" }
+                        }
+                    }
+                }
+                div { class: "pay-total", "{price_label}" }
+                div { class: "row",
+                    button {
+                        class: if period() == BillingPeriodApi::Monthly { "btn ghost plan active" } else { "btn ghost plan" },
+                        "aria-label": "plan-monthly",
+                        onclick: move |_| period.set(BillingPeriodApi::Monthly),
+                        "{SUB_PLAN_MONTHLY_LABEL}"
+                    }
+                    button {
+                        class: if period() == BillingPeriodApi::Yearly { "btn ghost plan active" } else { "btn ghost plan" },
+                        "aria-label": "plan-yearly",
+                        onclick: move |_| period.set(BillingPeriodApi::Yearly),
+                        "{SUB_PLAN_YEARLY_LABEL}"
+                    }
+                }
                 p { class: "dim", {SUB_PACKAGE_LABEL} }
                 p { class: "dim small", {SUB_DELETE_POLICY} }
                 button {
@@ -2062,7 +2402,7 @@ fn SubscriptionView(token: String, base: String, on_confirmed: EventHandler) -> 
                         let fut = (start_order.clone())(renewing);
                         spawn(async move { fut.await; });
                     },
-                    if renewing { "Renew" } else { "Subscribe $1/mo" }
+                    if renewing { "Renew" } else { "Subscribe {price_label}" }
                 }
             }
             match pay() {
@@ -2106,11 +2446,42 @@ fn SubscriptionView(token: String, base: String, on_confirmed: EventHandler) -> 
     }
 }
 
+fn parse_dec(s: &str) -> Option<rust_decimal::Decimal> {
+    let t = s.trim();
+    if t.is_empty() {
+        return Some(rust_decimal::Decimal::ZERO);
+    }
+    t.parse().ok()
+}
+
+fn parse_i64(s: &str) -> Option<i64> {
+    let t = s.trim();
+    if t.is_empty() {
+        return Some(0);
+    }
+    t.parse().ok()
+}
+
 fn truncate(s: &str, n: usize) -> String {
     if s.len() <= n * 2 {
         return String::from(s);
     }
     format!("{}\u{2026}{}", &s[..n], &s[s.len() - n..])
+}
+
+fn token_label(t: pos_api::schema::SplToken) -> &'static str {
+    match t {
+        pos_api::schema::SplToken::Usdc => "USDC",
+        pos_api::schema::SplToken::Usdt => "USDT",
+    }
+}
+
+fn dest_label(d: &pos_api::schema::DestinationResponse) -> String {
+    if d.chain == pos_api::schema::Chain::Solana {
+        format!("{} \u{00b7} {}", chain_label(d.chain), token_label(d.token))
+    } else {
+        chain_label(d.chain).to_owned()
+    }
 }
 
 fn chain_label(chain: pos_api::schema::Chain) -> &'static str {
@@ -2156,9 +2527,10 @@ const GOODS_COLS: &[(&str, &str)] = &[
 const TABLE_PAGE_SIZE: usize = 10;
 
 #[component]
-fn GoodsTab(token: String, base: String, shop_id: Uuid) -> Element {
+fn GoodsTab(token: String, base: String, shop_id: Uuid, is_admin: bool) -> Element {
     let modal = use_modal();
     let version = use_signal(|| 0u32);
+    let toast = use_toast();
     let mut goods = use_signal(Vec::<pos_api::schema::GoodsResponse>::new);
     let mut new_goods_name = use_signal(String::new);
     let mut new_goods_price = use_signal(String::new);
@@ -2182,6 +2554,8 @@ fn GoodsTab(token: String, base: String, shop_id: Uuid) -> Element {
         }
     }));
 
+    let create_base = base.clone();
+    let create_token = token.clone();
     let open_create = move |_| {
         let mut modal = modal.clone();
         new_goods_name.set(String::new());
@@ -2192,8 +2566,8 @@ fn GoodsTab(token: String, base: String, shop_id: Uuid) -> Element {
         modal.set_title("Create goods");
         modal.set_content(rsx! {
             GoodsForm {
-                token: token.clone(),
-                base: base.clone(),
+                token: create_token.clone(),
+                base: create_base.clone(),
                 shop_id,
                 name: new_goods_name,
                 price: new_goods_price,
@@ -2218,6 +2592,39 @@ fn GoodsTab(token: String, base: String, shop_id: Uuid) -> Element {
                 }
             }
             GoodsTable { goods }
+            if is_admin {
+                div { class: "card form",
+                    h3 { class: "doc-title", "{GOODS_MANAGE_TITLE}" }
+                    for g in goods().iter().cloned() {
+                        div { class: "row split",
+                            span { class: "small", "{g.name}" }
+                            button {
+                                class: "btn ghost",
+                                "aria-label": "delete-goods-{g.goods_id}",
+                                onclick: {
+                                    let base = base.clone();
+                                    let token = token.clone();
+                                    let toast = toast.clone();
+                                    move |_| {
+                                        let client = FetchClient { base_url: base.clone() };
+                                        let token = token.clone();
+                                        let mut toast = toast.clone();
+                                        let mut version = version;
+                                        let goods_id = g.goods_id;
+                                        spawn(async move {
+                                            match client.delete_goods(&token, shop_id, goods_id).await {
+                                                Ok(()) => version += 1,
+                                                Err(e) => notify(&mut toast, &e, true),
+                                            }
+                                        });
+                                    }
+                                },
+                                "{GOODS_DELETE_LABEL}"
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -2387,7 +2794,7 @@ fn cell(row: &GoodsRow, index: &str) -> Element {
                 rsx! { span { class: "dim small", "—" } }
             }
         }
-        "price" => rsx! { span { class: "goods-price", "◎ {row.0.price}" } },
+        "price" => rsx! { span { class: "goods-price", "{row.0.price}" } },
         "name" => rsx! {
             div { class: "goods-name-cell",
                 {goods_icon_of(&row.0)}
@@ -2445,84 +2852,191 @@ fn GoodsForm(
     let mut icon = use_signal(|| String::from(DEFAULT_ICON_KEY));
     let mut color = use_signal(|| String::from(DEFAULT_COLOR_KEY));
     let mut goods_type = use_signal(|| String::from(DEFAULT_GOODS_TYPE));
+    let mut barcode_format = use_signal(|| String::from(BARCODE_FMT_AUTO));
+    let mut camera_on = use_signal(|| false);
+    let busy = use_signal(|| false);
+    let code = barcode().trim().to_string();
+    let barcode_state = if code.is_empty() {
+        None
+    } else {
+        Some(match barcode_format_parse(&barcode_format()) {
+            Some(f) => pos_barcode::format::validate_as(f, &code),
+            None => pos_barcode::format::validate(&code),
+        })
+    };
+    let barcode_ok = barcode_state.as_ref().is_some_and(|res| res.is_ok());
+    let submit_toast = toast.clone();
+    let form_toast = toast.clone();
+    let barcode_msg = barcode_state.as_ref().map(|res| match res {
+        Ok(f) => format!("{BARCODE_OK_PREFIX}{f:?}"),
+        Err(e) => e.to_string(),
+    });
     rsx! {
         div { class: "stack",
-            input {
-                class: "field",
-                placeholder: "name",
-                value: "{name}",
-                oninput: move |e| name.set(e.value()),
-            }
-            select {
-                class: "field",
-                "aria-label": "goods-type",
-                value: "{goods_type}",
-                onchange: move |e| goods_type.set(e.value()),
-                for (key, label) in GOODS_TYPE_CHOICES {
-                    option { value: "{key}", "{label}" }
+            div { class: "field-group",
+                span { class: "field-label", "Name" }
+                input {
+                    class: "field",
+                    placeholder: "name",
+                    value: "{name}",
+                    oninput: move |e| name.set(e.value()),
                 }
             }
-            div { class: "row",
+            div { class: "field-group",
+                span { class: "field-label", "Type" }
+                select {
+                    class: "field",
+                    "aria-label": "goods-type",
+                    value: "{goods_type}",
+                    onchange: move |e| goods_type.set(e.value()),
+                    for (key, label) in GOODS_TYPE_CHOICES {
+                        option { value: "{key}", "{label}" }
+                    }
+                }
+            }
+            div { class: "field-group",
+                span { class: "field-label", "{FIELD_LABEL_PRICE}" }
                 input {
-                    class: "field grow",
+                    class: "field",
+                    inputmode: "decimal",
                     placeholder: "price",
                     value: "{price}",
                     oninput: move |e| price.set(e.value()),
                 }
+            }
+            div { class: "field-group",
+                span { class: "field-label", "{FIELD_LABEL_COST}" }
                 input {
-                    class: "field grow",
+                    class: "field",
+                    inputmode: "decimal",
                     placeholder: "cost",
                     value: "{cost}",
                     oninput: move |e| cost.set(e.value()),
                 }
+            }
+            div { class: "field-group",
+                span { class: "field-label", "{FIELD_LABEL_UNITS}" }
                 input {
-                    class: "field units",
+                    class: "field",
+                    inputmode: "numeric",
                     placeholder: "units",
                     value: "{units}",
                     oninput: move |e| units.set(e.value()),
                 }
+                p { class: "dim small", "{UNITS_HINT}" }
             }
-            p { class: "dim small", "units 0 = stock not tracked" }
-            input {
-                class: "field",
-                placeholder: "barcode (optional)",
-                value: "{barcode}",
-                oninput: move |e| barcode.set(e.value()),
-            }
-            p { class: "dim small", "EAN-13 / EAN-8 / UPC-A / Code39" }
-            div { class: "icon-picker",
-                for (key, path) in ICON_KEYS.iter().zip(ICON_PATHS.iter()) {
+            div { class: "field-group",
+                span { class: "field-label", "{FIELD_LABEL_BARCODE}" }
+                div { class: "row",
+                    input {
+                        class: "field grow",
+                        placeholder: "barcode (optional)",
+                        value: "{barcode}",
+                        oninput: move |e| barcode.set(e.value()),
+                    }
                     button {
-                        key: "{key}",
-                        class: if icon() == **key { "icon-pick active" } else { "icon-pick" },
-                        "aria-label": "icon-{key}",
-                        onclick: move |_| icon.set(String::from(*key)),
-                        Icon { path, size: 20 }
+                        class: if camera_on() { "scan-toggle on" } else { "scan-toggle" },
+                        "aria-label": "scan-barcode",
+                        onclick: move |_| {
+                            let t = form_toast.clone();
+                            if camera_on() {
+                                camera_on.set(false);
+                                return;
+                            }
+                            if !camera_supported() {
+                                let mut tc = t.clone();
+                                notify(&mut tc, CAMERA_UNSUPPORTED_MSG, true);
+                                return;
+                            }
+                            camera_on.set(true);
+                            spawn(run_barcode_capture(camera_on, barcode, t));
+                        },
+                        if camera_on() { "{CAMERA_STOP_LABEL}" } else { "{BARCODE_SCAN_START_LABEL}" }
+                    }
+                }
+                select {
+                    class: "field",
+                    "aria-label": "barcode-format",
+                    value: "{barcode_format}",
+                    onchange: move |e| barcode_format.set(e.value()),
+                    for (key, label) in BARCODE_FORMAT_CHOICES {
+                        option { value: "{key}", "{label}" }
+                    }
+                }
+                if let Some(msg) = barcode_msg {
+                    span {
+                        class: if barcode_ok { "barcode-status ok" } else { "barcode-status err" },
+                        "{msg}"
+                    }
+                }
+                if camera_on() {
+                    div { class: "cam-box",
+                        video {
+                            id: BARCODE_VIDEO_ID,
+                            class: "cam-video",
+                            autoplay: "true",
+                            playsinline: "true",
+                            muted: "true",
+                        }
                     }
                 }
             }
-            div { class: "color-picker",
-                for (key, hex) in GOODS_COLORS.iter() {
-                    button {
-                        key: "{key}",
-                        class: if color() == **key { "color-pick active" } else { "color-pick" },
-                        "aria-label": "color-{key}",
-                        style: "background:{hex}",
-                        onclick: move |_| color.set(String::from(*key)),
+            div { class: "field-group",
+                span { class: "field-label", "{FIELD_LABEL_ICON}" }
+                div { class: "row",
+                    GoodsIcon { icon: icon(), color: color(), size: 24 }
+                    select {
+                        class: "field grow",
+                        "aria-label": "goods-icon",
+                        value: "{icon}",
+                        onchange: move |e| icon.set(e.value()),
+                        for (key, label) in GOODS_ICON_CHOICES {
+                            option { value: "{key}", "{label}" }
+                        }
+                    }
+                }
+            }
+            div { class: "field-group",
+                span { class: "field-label", "{FIELD_LABEL_COLOR}" }
+                select {
+                    class: "field",
+                    "aria-label": "goods-color",
+                    value: "{color}",
+                    onchange: move |e| color.set(e.value()),
+                    for (key, label) in GOODS_COLOR_CHOICES {
+                        option { value: "{key}", "{label}" }
                     }
                 }
             }
             button {
                 class: "btn primary full",
                 "aria-label": "add-goods",
+                disabled: busy(),
                 onclick: move |_| {
+                    let goods_name = name().trim().to_string();
+                    if goods_name.is_empty() {
+                        notify(&mut submit_toast.clone(), GOODS_NAME_REQUIRED_MSG, true);
+                        return;
+                    }
+                    if let Some(Err(e)) = &barcode_state {
+                        notify(&mut submit_toast.clone(), &e.to_string(), true);
+                        return;
+                    }
+                    let (Some(price_v), Some(cost_v), Some(units_v)) = (
+                        parse_dec(&price()),
+                        parse_dec(&cost()),
+                        parse_i64(&units()),
+                    ) else {
+                        notify(&mut toast.clone(), GOODS_NUMBER_INVALID_MSG, true);
+                        return;
+                    };
                     let client = FetchClient { base_url: base.clone() };
                     let req = AddGoodsRequest {
                         shop_id,
-                        name: name().clone(),
-                        price: price().parse().unwrap_or_default(),
-                        cost: cost().parse().unwrap_or_default(),
-                        units: units().parse().unwrap_or_default(),
+                        name: goods_name,
+                        price: price_v,
+                        cost: cost_v,
+                        units: units_v,
                         barcode: {
                             let b = barcode().trim().to_string();
                             if b.is_empty() { None } else { Some(b) }
@@ -2534,7 +3048,9 @@ fn GoodsForm(
                     let token = token.clone();
                     let mut toast = toast.clone();
                     let mut modal = modal.clone();
+                    let mut busy = busy;
                     spawn(async move {
+                        busy.set(true);
                         match client.add_goods(&token, &req).await {
                             Ok(_) => {
                                 toast.success("goods created");
@@ -2543,16 +3059,17 @@ fn GoodsForm(
                             }
                             Err(e) => toast.error(&e),
                         }
+                        busy.set(false);
                     });
                 },
-                "Add goods"
+                if busy() { "…" } else { "Add goods" }
             }
         }
     }
 }
 
 #[component]
-fn SettingsTab(token: String, base: String, shop_id: Uuid) -> Element {
+fn SettingsTab(token: String, base: String, shop_id: Uuid, is_admin: bool) -> Element {
     let mut destinations = use_signal(Vec::<pos_api::schema::DestinationResponse>::new);
     let mut dest_chain = use_signal(|| Chain::Solana);
     let dest_token = use_signal(SplToken::default);
@@ -2565,7 +3082,7 @@ fn SettingsTab(token: String, base: String, shop_id: Uuid) -> Element {
     let mut vat_mode = use_signal(|| VatMode::None);
     let mut vat_rate = use_signal(String::new);
     let mut fx_input = use_signal(String::new);
-    let mut currency = use_signal(|| Currency::Thb);
+    let mut currency = use_signal(|| Currency::Usdt);
 
     let base_future = base.clone();
     let token_future = token.clone();
@@ -2586,7 +3103,7 @@ fn SettingsTab(token: String, base: String, shop_id: Uuid) -> Element {
             {
                 vat_mode.set(s.vat_mode);
                 vat_rate.set(s.vat_rate.normalize().to_string());
-                fx_input.set(s.fx_thb_per_sol.normalize().to_string());
+                fx_input.set(s.fx_thb_per_usd.normalize().to_string());
                 currency.set(s.currency);
             }
         }
@@ -2631,6 +3148,12 @@ fn SettingsTab(token: String, base: String, shop_id: Uuid) -> Element {
                             div { class: "card form",
                                 h3 { class: "doc-title", "Usage" }
                                 QuotaUsage { token: token.clone(), base: base.clone() }
+                            }
+                        },
+                        SettingsSection::Storage => rsx! {
+                            div { class: "card form",
+                                h3 { class: "doc-title", "{STORAGE_TITLE}" }
+                                StorageView { token: token.clone(), base: base.clone(), shop_id, is_admin }
                             }
                         },
                         SettingsSection::Receive => rsx! {
@@ -2679,7 +3202,7 @@ fn SettingsTab(token: String, base: String, shop_id: Uuid) -> Element {
                                                                 return;
                                                             }
                                                             let Some(acct) = wallet.account.cloned() else { return; };
-                                                            let req = AddDestinationRequest { shop_id, chain: Chain::Solana, address: acct.pubkey, token: SplToken::Sol, label: Some(kind.name().to_string()) };
+                                                            let req = AddDestinationRequest { shop_id, chain: Chain::Solana, address: acct.pubkey, token: SplToken::Usdc, label: Some(kind.name().to_string()) };
                                                             match client.add_destination(&token, &req).await {
                                                                 Ok(_) => {
                                                                     if let Ok(d) = client.list_destinations(&token, shop_id).await { destinations.set(d); }
@@ -2697,6 +3220,7 @@ fn SettingsTab(token: String, base: String, shop_id: Uuid) -> Element {
                                 }
                                 select {
                                     class: "field",
+                                    "aria-label": "dest-chain",
                                     value: "{dest_chain:?}",
                                     onchange: move |e| {
                                         dest_chain.set(match e.value().as_str() {
@@ -2707,7 +3231,7 @@ fn SettingsTab(token: String, base: String, shop_id: Uuid) -> Element {
                                             _ => Chain::Solana,
                                         });
                                     },
-                                    option { value: "Solana", "Solana (SOL)" }
+                                    option { value: "Solana", "Solana (USDC / USDT)" }
                                     option { value: "Eth", "Ethereum (ETH)" }
                                     option { value: "Btc", "Bitcoin (BTC)" }
                                     option { value: "Binance", "Binance Pay (BNB)" }
@@ -2724,10 +3248,9 @@ fn SettingsTab(token: String, base: String, shop_id: Uuid) -> Element {
                                                 dest_token.set(match e.value().as_str() {
                                                     "Usdc" => SplToken::Usdc,
                                                     "Usdt" => SplToken::Usdt,
-                                                    _ => SplToken::Sol,
+                                                    _ => SplToken::Usdc,
                                                 });
                                             },
-                                            option { value: "Sol", "Pay in SOL" }
                                             option { value: "Usdc", "Pay in USDC" }
                                             option { value: "Usdt", "Pay in USDT" }
                                         }
@@ -2803,8 +3326,8 @@ fn SettingsTab(token: String, base: String, shop_id: Uuid) -> Element {
                                 }
                                 input {
                                     class: "field",
-                                    "aria-label": "fx-thb-per-sol",
-                                    placeholder: "THB per ◎ (PromptPay QR, 0 = off)",
+                                    "aria-label": "fx-thb-per-usd",
+                                    placeholder: "THB per $1 (swap rate, 0 = off)",
                                     value: "{fx_input}",
                                     oninput: move |e| fx_input.set(e.value()),
                                 }
@@ -2818,8 +3341,8 @@ fn SettingsTab(token: String, base: String, shop_id: Uuid) -> Element {
                                             _ => Currency::Thb,
                                         });
                                     },
+                                    option { value: "Usdt", "USD $ — USDC / USDT" }
                                     option { value: "Thb", "THB \u{0e3f} — Thai baht" }
-                                    option { value: "Usdt", "USDT \u{25c8} — stablecoin" }
                                 }
                                 button {
                                     class: "btn primary full",
@@ -2837,7 +3360,7 @@ fn SettingsTab(token: String, base: String, shop_id: Uuid) -> Element {
                                             let fx = fx_input().parse::<rust_decimal::Decimal>().unwrap_or(rust_decimal::Decimal::ZERO);
                                             let cur = currency();
                                             spawn(async move {
-                                                let req = UpdateShopSettingsRequest { vat_mode: mode, vat_rate: rate, fx_thb_per_sol: fx, currency: cur };
+                                                let req = UpdateShopSettingsRequest { vat_mode: mode, vat_rate: rate, fx_thb_per_usd: fx, currency: cur };
                                                 match client.update_shop_settings(&token, shop_id, &req).await {
                                                     Ok(_) => notify(&mut toast, "Payment settings saved", false),
                                                     Err(e) => notify(&mut toast, &e, true),
@@ -2859,7 +3382,7 @@ fn SettingsTab(token: String, base: String, shop_id: Uuid) -> Element {
 
 #[component]
 fn ReportsTab(token: String, base: String, shop_id: Uuid) -> Element {
-    let mut invoices = use_signal(Vec::<pos_api::schema::InvoiceResponse>::new);
+    let mut billings = use_signal(Vec::<pos_api::schema::BillingResponse>::new);
     let mut cfg = use_signal(|| Option::<pos_api::schema::ShopResponse>::None);
     let toast = use_toast();
 
@@ -2872,8 +3395,8 @@ fn ReportsTab(token: String, base: String, shop_id: Uuid) -> Element {
         let token = token_future.clone();
         let mut toast = toast.clone();
         async move {
-            match client.list_invoices(&token, shop_id).await {
-                Ok(i) => invoices.set(i),
+            match client.list_billings(&token, shop_id).await {
+                Ok(i) => billings.set(i),
                 Err(e) => notify(&mut toast, &e, true),
             }
             if let Ok(shops) = client.list_shops(&token).await {
@@ -2882,24 +3405,21 @@ fn ReportsTab(token: String, base: String, shop_id: Uuid) -> Element {
         }
     });
 
-    let (currency, fx) = cfg()
-        .map(|s| (s.currency, s.fx_thb_per_sol))
-        .unwrap_or((pos_api::schema::Currency::Thb, rust_decimal::Decimal::ZERO));
-    let thb = currency == pos_api::schema::Currency::Thb && fx > rust_decimal::Decimal::ZERO;
-    let sym = if thb { "\u{0e3f}" } else { "\u{25c8}" };
-    let show = move |v: rust_decimal::Decimal| {
-        if thb {
-            (v * fx).round_dp(2).normalize()
-        } else {
-            v.normalize()
-        }
+    let currency = cfg()
+        .map(|s| s.currency)
+        .unwrap_or(pos_api::schema::Currency::Usdt);
+    let sym = if currency == pos_api::schema::Currency::Usdt {
+        "$"
+    } else {
+        "\u{0e3f}"
     };
+    let show = move |v: rust_decimal::Decimal| v.round_dp(2).normalize();
 
     let zero = rust_decimal::Decimal::ZERO;
-    let revenue = invoices().iter().map(|i| i.total).fold(zero, |a, t| a + t);
-    let cost = invoices().iter().map(|i| i.cost).fold(zero, |a, t| a + t);
+    let revenue = billings().iter().map(|i| i.total).fold(zero, |a, t| a + t);
+    let cost = billings().iter().map(|i| i.cost).fold(zero, |a, t| a + t);
     let profit = revenue - cost;
-    let rows: Vec<(String, pos_api::schema::InvoiceResponse)> = invoices()
+    let rows: Vec<(String, pos_api::schema::BillingResponse)> = billings()
         .iter()
         .cloned()
         .map(|inv| {
@@ -2919,7 +3439,7 @@ fn ReportsTab(token: String, base: String, shop_id: Uuid) -> Element {
                 div { class: "card stat",
                     span { class: "stat-label", "Revenue" }
                     span { class: "stat-value", "{sym} {show(revenue)}" }
-                    span { class: "dim small", "{invoices().len()} sales" }
+                    span { class: "dim small", "{billings().len()} sales" }
                 }
                 div { class: "card stat",
                     span { class: "stat-label", "Profit" }
@@ -2933,15 +3453,15 @@ fn ReportsTab(token: String, base: String, shop_id: Uuid) -> Element {
                     div { class: "list-row",
                         div { class: "goods-col",
                             span { class: "goods-name", "{name}" }
-                            span { class: "dim small", "{chain_label(inv.destination.chain)} · margin ◎{inv.total - inv.cost}" }
+                            span { class: "dim small", "{chain_label(inv.destination.chain)} \u{00b7} margin {sym}{show(inv.total - inv.cost)}" }
                         }
                         div { class: "goods-col right",
-                            span { class: "goods-price", "◎ {inv.total}" }
+                            span { class: "goods-price", "{sym} {show(inv.total)}" }
                             a { class: "dim small pdf-link", href: "{base}{inv.pdf_url}", target: "_blank", "PDF" }
                         }
                     }
                 }
-                if invoices().is_empty() {
+                if billings().is_empty() {
                     p { class: "dim pad", "no sales yet — complete one in the Sell tab" }
                 }
             }
@@ -2965,8 +3485,8 @@ html, body { background: #221418; color: #fff3e9; font-family: system-ui, -apple
 .auth { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 24px; padding: 24px; }
 .brand { text-align: center; }
 .brand h1 { font-size: 42px; letter-spacing: 8px; color: #ffab73; text-shadow: 0 2px 0 #5c2e3a, 0 0 24px rgba(255, 171, 115, 0.35); }
-.brand h1::after { content: \" ₍^·͈༝·͈^₎\"; font-size: 24px; letter-spacing: 0; vertical-align: middle; }
-.brand::before { content: \"✿ いらっしゃいませ ✿\"; display: block; font-size: 13px; letter-spacing: 4px; color: #ffb3c6; margin-bottom: 14px; }
+.brand h1::after { content: \"\"; display: inline-block; width: 26px; height: 26px; margin-left: 10px; vertical-align: middle; background: url('data:image/svg+xml,<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\"><path fill=\"%23ffab73\" d=\"M4 4l4 2.5a8 8 0 0 1 8 0L20 4v9a8 8 0 0 1-16 0V4Z\"/><circle cx=\"9.2\" cy=\"11\" r=\"1.3\" fill=\"%233a1d28\"/><circle cx=\"14.8\" cy=\"11\" r=\"1.3\" fill=\"%233a1d28\"/></svg>') no-repeat center/contain; }
+.brand::before { content: \"いらっしゃいませ\"; display: block; font-size: 13px; letter-spacing: 4px; color: #ffb3c6; margin-bottom: 14px; padding-left: 22px; background: url('data:image/svg+xml,<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\"><g fill=\"%23ffb3c6\"><circle cx=\"12\" cy=\"5\" r=\"3.2\"/><circle cx=\"18.5\" cy=\"9.8\" r=\"3.2\"/><circle cx=\"16\" cy=\"17.4\" r=\"3.2\"/><circle cx=\"8\" cy=\"17.4\" r=\"3.2\"/><circle cx=\"5.5\" cy=\"9.8\" r=\"3.2\"/></g><circle cx=\"12\" cy=\"12\" r=\"3\" fill=\"%233a1d28\"/></svg>') no-repeat left center/14px; }
 .brand-mark { width: 72px; height: 72px; margin: 0 auto 12px; border-radius: 26px; background: linear-gradient(145deg, #ffab73, #ff8fb3); color: #3a1d28; display: flex; align-items: center; justify-content: center; box-shadow: 0 6px 0 #5c2e3a, 0 12px 28px rgba(255, 143, 179, 0.25); }
 .form { display: flex; flex-direction: column; gap: 10px; width: 100%; max-width: 360px; }
 .card { background: #321e26; border: 1px solid #452a35; border-radius: 20px; padding: 16px; }
@@ -2974,6 +3494,11 @@ html, body { background: #221418; color: #fff3e9; font-family: system-ui, -apple
 .field { background: #2a181f; border: 1px solid #452a35; border-radius: 14px; color: #fff3e9; padding: 12px 14px; font-size: 15px; outline: none; width: 100%; }
 .field:focus { border-color: #ffab73; box-shadow: 0 0 0 3px rgba(255, 171, 115, 0.2); }
 select.field { appearance: none; }
+.field-group { display: flex; flex-direction: column; gap: 6px; }
+.field-label { font-size: 11px; text-transform: uppercase; letter-spacing: 2px; color: #c9a8a0; }
+.barcode-status { font-size: 12px; }
+.barcode-status.ok { color: #9fe6c8; }
+.barcode-status.err { color: #ff8fa3; }
 
 .btn { border: none; border-radius: 14px; padding: 12px 18px; font-size: 15px; font-weight: 700; cursor: pointer; color: #fff3e9; background: #452a35; transition: transform 0.12s ease; }
 button:focus { outline: none; }
@@ -2982,6 +3507,8 @@ button:focus-visible { outline: 2px solid #ffab73; outline-offset: 1px; }
 .btn.primary { background: linear-gradient(145deg, #ffab73, #ff8c5f); color: #3a1d28; box-shadow: 0 4px 0 #b05a3c; }
 .btn.primary:not(:disabled):active { transform: translateY(2px); box-shadow: 0 2px 0 #b05a3c; }
 .btn.ghost { background: transparent; border: 2px solid #ff9eb5; color: #ffb3c6; }
+.btn.ghost.plan { flex: 1; }
+.btn.ghost.plan.active { background: rgba(255, 158, 181, 0.18); border-color: #ffab73; color: #ffab73; }
 .btn.full { width: 100%; }
 .icon-btn { background: transparent; border: none; color: #c9a8a0; cursor: pointer; padding: 6px; display: flex; align-items: center; }
 .icon-btn:hover { color: #ffab73; }
@@ -3019,7 +3546,7 @@ button:focus-visible { outline: 2px solid #ffab73; outline-offset: 1px; }
 .goods-tile.picked .unit-chip { color: #ffab73; }
 
 .page-title { font-size: 22px; font-weight: 800; letter-spacing: 0.5px; }
-.page-title::before { content: \"✦ \"; color: #ff9eb5; }
+.page-title::before { content: \"\"; display: inline-block; width: 14px; height: 14px; margin-right: 8px; vertical-align: -1px; background: url('data:image/svg+xml,<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\"><path fill=\"%23ff9eb5\" d=\"M12 2l2.5 7.1L22 12l-7.5 2.9L12 22l-2.5-7.1L2 12l7.5-2.9L12 2Z\"/></svg>') no-repeat center/contain; }
 .doc-title { font-size: 13px; text-transform: uppercase; letter-spacing: 2px; color: #c9a8a0; }
 
 .list-row.goods { align-items: center; }
@@ -3033,12 +3560,6 @@ button:focus-visible { outline: 2px solid #ffab73; outline-offset: 1px; }
 
 .goods-img { width: 44px; height: 44px; border-radius: 14px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
 .goods-name-cell { display: flex; align-items: center; gap: 8px; }
-.icon-picker { display: grid; grid-template-columns: repeat(auto-fill, minmax(36px, 1fr)); gap: 6px; }
-.icon-pick { background: #321e26; border: 1px solid #452a35; color: #c9a8a0; border-radius: 10px; height: 36px; display: flex; align-items: center; justify-content: center; cursor: pointer; }
-.icon-pick.active { border-color: #ffab73; color: #ffab73; background: #4d2b3a; }
-.color-picker { display: grid; grid-template-columns: repeat(auto-fill, minmax(28px, 1fr)); gap: 6px; }
-.color-pick { width: 28px; height: 28px; border-radius: 50%; border: 2px solid transparent; cursor: pointer; }
-.color-pick.active { border-color: #ffab73; box-shadow: 0 0 0 2px rgba(255, 171, 115, 0.35); }
 
 .shop-select { max-width: 420px; margin: 16vh auto 0; }
 .onboard { text-align: center; display: flex; flex-direction: column; align-items: center; gap: 10px; margin-bottom: 8px; }
@@ -3063,7 +3584,7 @@ button:focus-visible { outline: 2px solid #ffab73; outline-offset: 1px; }
 .pay-total { font-size: 28px; font-weight: 800; color: #ffab73; }
 .qr { background: #fff8f0; padding: 12px; border-radius: 18px; box-shadow: 0 0 0 4px rgba(255, 158, 181, 0.25); animation: qr-pop 0.25s cubic-bezier(0.34, 1.56, 0.64, 1); transform-origin: center; }
 @keyframes qr-pop { 0% { opacity: 0; transform: scale(0.85); } 100% { opacity: 1; transform: scale(1); } }
-.qr svg { display: block; width: 220px; height: 220px; }
+.qr svg { display: block; width: 220px; height: 220px; margin: 0 auto; }
 .countdown { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .countdown.urgent { color: #ff8fa3; animation: urgent-throb 1s ease-in-out infinite; }
 @keyframes urgent-throb { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.55; transform: scale(1.06); } }
@@ -3115,7 +3636,7 @@ a.pdf-link:hover { color: #ffab73; }
   .shop-list { flex-wrap: nowrap; }
   .total-bar { left: 50%; right: auto; transform: translateX(-50%); width: calc(min(100vw, 1040px) - 190px); }
   .fab { right: max(24px, calc(50% - 520px + 24px)); }
-  .qr svg { width: 260px; height: 260px; }
+  .qr svg { width: 260px; height: 260px; margin: 0 auto; }
 }
 
 .pay-status { display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 13px; color: #c9a8a0; }
@@ -3132,21 +3653,21 @@ a.pdf-link:hover { color: #ffab73; }
 
 .toast-host { position: fixed; top: 16px; right: 16px; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; z-index: 30; width: min(calc(100vw - 32px), 420px); pointer-events: none; }
 .toast { pointer-events: none; display: flex; align-items: center; justify-content: space-between; gap: 12px; background: #321e26; border: 1px solid #452a35; border-left: 4px solid #c9a8a0; border-radius: 14px; padding: 10px 14px; font-size: 14px; box-shadow: 0 8px 24px rgba(0,0,0,0.45); }
-.toast::before { content: \"(•̀ᴗ•́)و\"; margin-right: 4px; }
+.toast::before { content: \"\"; flex: none; width: 16px; height: 16px; margin-right: 4px; background: url('data:image/svg+xml,<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\"><circle cx=\"12\" cy=\"12\" r=\"10\" fill=\"%23c9a8a0\"/><circle cx=\"9\" cy=\"10\" r=\"1.3\" fill=\"%233a1d28\"/><circle cx=\"15\" cy=\"10\" r=\"1.3\" fill=\"%233a1d28\"/><path d=\"M8.5 14a4.5 4.5 0 0 0 7 0\" stroke=\"%233a1d28\" stroke-width=\"1.8\" fill=\"none\" stroke-linecap=\"round\"/></svg>') no-repeat center/contain; }
 .toast .toast-close { pointer-events: auto; }
 .toast.success { border-left-color: #9fe6c8; }
-.toast.success::before { content: \"(๑˃ᴗ˂)ﻭ\"; }
+.toast.success::before { background: url('data:image/svg+xml,<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\"><circle cx=\"12\" cy=\"12\" r=\"10\" fill=\"%239fe6c8\"/><path d=\"M7.5 12.5l3 3 6-6.5\" stroke=\"%23274433\" stroke-width=\"2.4\" fill=\"none\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></svg>') no-repeat center/contain; }
 .toast.error { border-left-color: #ff8fa3; }
-.toast.error::before { content: \"(>﹏<)\"; }
+.toast.error::before { background: url('data:image/svg+xml,<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\"><circle cx=\"12\" cy=\"12\" r=\"10\" fill=\"%23ff8fa3\"/><path d=\"M8.5 8.5l7 7m0-7l-7 7\" stroke=\"%235c2e3a\" stroke-width=\"2.4\" stroke-linecap=\"round\"/></svg>') no-repeat center/contain; }
 .toast.warning { border-left-color: #ffe3a3; }
-.toast.warning::before { content: \"( •̀ω•́ )\"; }
+.toast.warning::before { background: url('data:image/svg+xml,<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\"><path fill=\"%23ffe3a3\" d=\"M12 3l10 17.5H2L12 3Z\"/><path d=\"M12 10v4.5\" stroke=\"%235c4726\" stroke-width=\"2.2\" stroke-linecap=\"round\"/><circle cx=\"12\" cy=\"17.6\" r=\"1.3\" fill=\"%235c4726\"/></svg>') no-repeat center/contain; }
 .toast.info { border-left-color: #ffab73; }
-.toast.info::before { content: \"(＾▽＾)\"; }
+.toast.info::before { background: url('data:image/svg+xml,<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\"><circle cx=\"12\" cy=\"12\" r=\"10\" fill=\"%23ffab73\"/><path d=\"M12 11v5.5\" stroke=\"%235c2e3a\" stroke-width=\"2.2\" stroke-linecap=\"round\"/><circle cx=\"12\" cy=\"7.8\" r=\"1.3\" fill=\"%235c2e3a\"/></svg>') no-repeat center/contain; }
 .toast-close { background: transparent; border: none; color: #c9a8a0; cursor: pointer; padding: 2px 4px; font-size: 12px; }
 .toast-close:hover { color: #fff3e9; }
 
 .modal-overlay { position: fixed; inset: 0; background: rgba(20, 8, 14, 0.75); display: flex; align-items: center; justify-content: center; padding: 20px; z-index: 50; }
-.modal { position: relative; background: #321e26; border: 1px solid #452a35; border-radius: 24px; padding: 20px; width: 100%; max-width: 400px; display: flex; flex-direction: column; gap: 14px; box-shadow: 0 16px 48px rgba(0,0,0,0.55), 0 0 0 4px rgba(255, 158, 181, 0.1); }
+.modal { position: relative; background: #321e26; border: 1px solid #452a35; border-radius: 24px; padding: 20px; width: 100%; max-width: 400px; max-height: calc(100vh - 40px); overflow-y: auto; display: flex; flex-direction: column; gap: 14px; box-shadow: 0 16px 48px rgba(0,0,0,0.55), 0 0 0 4px rgba(255, 158, 181, 0.1); }
 .modal-close { position: absolute; top: 10px; right: 10px; font-size: 20px; }
 .center { align-items: center; }
 
@@ -3154,13 +3675,10 @@ a.pdf-link:hover { color: #ffab73; }
 .banner.ok { background: #2c3a33; color: #9fe6c8; border: 1px solid #9fe6c8; }
 .banner.warn { background: #3a3320; color: #ffe3a3; border: 1px solid #ffe3a3; }
 .banner.err { background: #3a2028; color: #ff8fa3; border: 1px solid #ff8fa3; }
+.banner.expiring { background: #3a2028; color: #ffb3c0; border: 2px solid #ff4d5e; }
 .quota-row { display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
 .quota { display: flex; flex-direction: column; gap: 3px; }
 .bar { height: 8px; border-radius: 999px; background: #452a35; overflow: hidden; }
 .bar-fill { height: 100%; border-radius: 999px; background: linear-gradient(90deg, #ffab73, #ff8fb3); }
 
-@media (max-width: 560px) {
-    .settings-split { grid-template-columns: 1fr; }
-    .settings-nav { flex-direction: row; flex-wrap: wrap; }
-}
 ";

@@ -12,6 +12,7 @@ pub struct MaintenanceReport {
     pub marked_lapsed: u64,
     pub soft_deleted_shops: u64,
     pub hard_deleted_shops: u64,
+    pub hard_deleted_billings: u64,
 }
 
 /// Runs one sweep pass. Every stage is a conditional update, so concurrent
@@ -44,12 +45,15 @@ pub async fn run_maintenance(
 
     let purge_before = now - Duration::days(cfg.recovery_days.max(0));
     for sub in svc.subscriptions.list_to_delete(purge_before).await? {
+        // Billings first — they reference shops without ON DELETE CASCADE.
+        let billings = svc.billings.hard_delete_expired(purge_before).await?;
         let deleted = svc.shops.hard_delete_expired(purge_before).await?;
         svc.subscriptions
             .set_status(sub.id, SubscriptionStatus::Deleted, sub.grace_until)
             .await?;
         report.hard_deleted_shops += deleted;
-        tracing::warn!(user_id = %sub.user_id, sub_id = %sub.id, shops = deleted, "recovery window passed, shop data permanently deleted");
+        report.hard_deleted_billings += billings;
+        tracing::warn!(user_id = %sub.user_id, sub_id = %sub.id, shops = deleted, billings, "recovery window passed, shop data permanently deleted");
     }
 
     Ok(report)

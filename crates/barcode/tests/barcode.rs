@@ -37,6 +37,36 @@ fn accepts_code39_and_rejects_bad_chars() {
 }
 
 #[test]
+fn validates_as_selected_format() {
+    assert_eq!(
+        format::validate_as(BarcodeFormat::Ean13, EAN13_VALID).ok(),
+        Some(BarcodeFormat::Ean13)
+    );
+    assert_eq!(
+        format::validate_as(BarcodeFormat::Ean8, EAN8_VALID).ok(),
+        Some(BarcodeFormat::Ean8)
+    );
+    assert_eq!(
+        format::validate_as(BarcodeFormat::UpcA, UPC_VALID).ok(),
+        Some(BarcodeFormat::UpcA)
+    );
+    assert_eq!(
+        format::validate_as(BarcodeFormat::Code39, "POS-1").ok(),
+        Some(BarcodeFormat::Code39)
+    );
+}
+
+#[test]
+fn validate_as_rejects_wrong_format() {
+    assert!(format::validate_as(BarcodeFormat::Ean8, EAN13_VALID).is_err());
+    assert!(format::validate_as(BarcodeFormat::Ean13, EAN8_VALID).is_err());
+    assert!(format::validate_as(BarcodeFormat::Code39, "PÖS").is_err());
+    assert!(format::validate_as(BarcodeFormat::UpcA, EAN13_VALID).is_err());
+    assert!(format::validate_as(BarcodeFormat::Ean13, EAN13_BAD_CHECKSUM).is_err());
+    assert!(format::validate_as(BarcodeFormat::Ean13, "").is_err());
+}
+
+#[test]
 fn trims_and_uppercases() {
     assert_eq!(format::normalize(" 4006381333931 "), EAN13_VALID);
     assert_eq!(format::normalize("pos-1"), "POS-1");

@@ -37,9 +37,54 @@ pub enum WavError {
 }
 
 #[derive(Debug, thiserror::Error)]
+pub enum HfError {
+    #[error("model spec must be owner/repo/path/file.onnx: {0}")]
+    BadSpec(String),
+
+    #[error("HOME is not set; cannot locate model cache")]
+    NoHome,
+
+    #[error("download failed for {0}: {1}")]
+    Download(String, std::io::Error),
+
+    #[error("http status {1} for {0}")]
+    HttpStatus(String, u16),
+
+    #[error("cached file too small (truncated download): {0}")]
+    TooSmall(PathBuf),
+
+    #[error("cannot create cache dir/file {}: {}", .0.display(), .1)]
+    CacheCreate(PathBuf, std::io::Error),
+
+    #[error("http request failed: {0}")]
+    Request(String),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum TtsError {
+    #[error("cannot spawn {0:?}")]
+    EspeakSpawn(std::io::Error),
+
+    #[error("espeak-ng failed: {0}")]
+    EspeakFailed(String),
+
+    #[error("cannot open voice config {}: {}", .0.display(), .1)]
+    ConfigOpen(PathBuf, std::io::Error),
+
+    #[error("invalid voice config json: {0}")]
+    ConfigParse(#[source] serde_json::Error),
+
+    #[error("inference failed: {0}")]
+    Inference(String),
+}
+
+#[derive(Debug, thiserror::Error)]
 pub enum AppError {
     #[error("missing required argument: {0}")]
     MissingArg(String),
+
+    #[error("unknown voice preset: {0}")]
+    UnknownVoice(String),
 
     #[error(transparent)]
     Parse(#[from] ParseError),
@@ -52,4 +97,10 @@ pub enum AppError {
 
     #[error(transparent)]
     Wav(#[from] WavError),
+
+    #[error(transparent)]
+    Hf(#[from] HfError),
+
+    #[error(transparent)]
+    Tts(#[from] TtsError),
 }

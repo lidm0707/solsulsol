@@ -152,7 +152,6 @@ pub const USDT_MINT: &str = "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB";
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SplToken {
     #[default]
-    Sol,
     Usdc,
     Usdt,
 }
@@ -161,25 +160,22 @@ impl SplToken {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::Sol => "sol",
             Self::Usdc => "usdc",
             Self::Usdt => "usdt",
         }
     }
 
     #[must_use]
-    pub const fn mint(self) -> Option<&'static str> {
+    pub const fn mint(self) -> &'static str {
         match self {
-            Self::Sol => None,
-            Self::Usdc => Some(USDC_MINT),
-            Self::Usdt => Some(USDT_MINT),
+            Self::Usdc => USDC_MINT,
+            Self::Usdt => USDT_MINT,
         }
     }
 
     #[must_use]
     pub fn parse(raw: &str) -> Option<Self> {
         match raw {
-            "sol" => Some(Self::Sol),
             "usdc" => Some(Self::Usdc),
             "usdt" => Some(Self::Usdt),
             _ => None,

@@ -92,7 +92,7 @@ impl ApiClient for Scripted {
             name: req.name.clone(),
             vat_mode: VatMode::None,
             vat_rate: rust_decimal::Decimal::ZERO,
-            fx_thb_per_sol: rust_decimal::Decimal::ZERO,
+            fx_thb_per_usd: rust_decimal::Decimal::ZERO,
             currency: Default::default(),
         })
     }
@@ -185,15 +185,31 @@ impl ApiClient for Scripted {
         &self,
         _t: &str,
         _r: &CheckoutRequest,
-    ) -> Result<pos_api::schema::InvoiceResponse, String> {
+    ) -> Result<pos_api::schema::BillingResponse, String> {
         Err(String::from("not scripted"))
     }
-    async fn list_invoices(
+    async fn list_billings(
         &self,
         _t: &str,
         _s: Uuid,
-    ) -> Result<Vec<pos_api::schema::InvoiceResponse>, String> {
+    ) -> Result<Vec<pos_api::schema::BillingResponse>, String> {
         Ok(Vec::new())
+    }
+    async fn delete_goods(&self, _t: &str, _s: Uuid, g: Uuid) -> Result<(), String> {
+        if let Ok(mut v) = self.goods.lock() {
+            v.retain(|x| x.goods_id != g);
+        }
+        Ok(())
+    }
+    async fn list_storage_objects(
+        &self,
+        _t: &str,
+        _s: Uuid,
+    ) -> Result<Vec<pos_api::schema::StorageObjectResponse>, String> {
+        Ok(Vec::new())
+    }
+    async fn delete_storage_object(&self, _t: &str, _s: Uuid, _k: Uuid) -> Result<(), String> {
+        Ok(())
     }
 }
 
@@ -262,7 +278,7 @@ async fn wallet_signin_stores_token_and_goods_round_trip() {
         .await
         .expect("shop ok")
         .shop_id;
-    client
+    let added = client
         .add_goods(
             "t0k3n",
             &AddGoodsRequest {
@@ -287,6 +303,17 @@ async fn wallet_signin_stores_token_and_goods_round_trip() {
             .len(),
         1
     );
+    client
+        .delete_goods("t0k3n", shop_id, added.goods_id)
+        .await
+        .expect("delete ok");
+    assert!(
+        client
+            .list_goods("t0k3n", shop_id)
+            .await
+            .expect("list ok")
+            .is_empty()
+    );
     client.auth_logout("t0k3n").await.expect("logout ok");
     store.clear().await;
     assert_eq!(store.load().await, None);
@@ -300,7 +327,13 @@ async fn payment_order_verifies_into_subscription() {
         goods: std::sync::Mutex::new(Vec::new()),
     };
     let order = client
-        .create_payment_order("t", &CreatePaymentOrderRequest { renew: false })
+        .create_payment_order(
+            "t",
+            &CreatePaymentOrderRequest {
+                renew: false,
+                period: None,
+            },
+        )
         .await
         .expect("order ok");
     assert_eq!(order.amount_usdc, rust_decimal::Decimal::ONE);

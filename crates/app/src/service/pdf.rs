@@ -7,7 +7,7 @@ use printpdf::path::{PaintMode, WindingOrder};
 use printpdf::{BuiltinFont, Color, Image, ImageTransform, Mm, PdfDocument, Rgb};
 use rust_decimal::Decimal;
 
-use crate::domain::entities::{Currency, Invoice, VatMode};
+use crate::domain::entities::{Billing, Currency, VatMode};
 
 /// Thermal-roll paper width used by grocery POS printers.
 pub const PAPER_W_MM: f32 = 80.0;
@@ -58,16 +58,15 @@ struct Ctx<'a> {
     y: f32,
 }
 
-pub fn render_invoice_pdf(
-    invoice: &Invoice,
+pub fn render_billing_pdf(
+    billing: &Billing,
     shop_name: &str,
     qr_png: &[u8],
     currency: Currency,
-    fx_thb_per_sol: Decimal,
 ) -> Result<Vec<u8>, PdfError> {
-    let money = MoneyFmt::new(currency, fx_thb_per_sol);
+    let money = MoneyFmt::new(currency);
     let doc = PdfDocument::empty("POS Billing");
-    let (page_idx, layer_idx) = doc.add_page(Mm(PAPER_W_MM), Mm(page_height(invoice)), "Billing");
+    let (page_idx, layer_idx) = doc.add_page(Mm(PAPER_W_MM), Mm(page_height(billing)), "Billing");
     let layer = doc.get_page(page_idx).get_layer(layer_idx);
     let fonts = Fonts {
         regular: doc
@@ -81,14 +80,14 @@ pub fn render_invoice_pdf(
     let mut c = Ctx {
         layer: &layer,
         fonts: &fonts,
-        page_h: page_height(invoice),
+        page_h: page_height(billing),
         y: 0.0,
     };
 
-    header(&mut c, invoice, shop_name);
-    items(&mut c, invoice, &money);
-    totals(&mut c, invoice, &money);
-    qr_card(&mut c, invoice, &qr);
+    header(&mut c, billing, shop_name);
+    items(&mut c, billing, &money);
+    totals(&mut c, billing, &money);
+    qr_card(&mut c, billing, &qr);
     footer(&mut c);
 
     doc.save_to_bytes()
@@ -96,7 +95,7 @@ pub fn render_invoice_pdf(
 }
 
 /// Total paper length for this billing, derived from row counts.
-fn page_height(inv: &Invoice) -> f32 {
+fn page_height(inv: &Billing) -> f32 {
     let vat_rows = if inv.vat_mode == VatMode::None { 0 } else { 2 };
     let addr = inv.destination.address.as_str();
     let addr_rows = addr.len().div_ceil(ADDR_WRAP_CHARS);
@@ -104,11 +103,11 @@ fn page_height(inv: &Invoice) -> f32 {
     ROW_MM * rows as f32 + QR_SIZE_MM + 14.0
 }
 
-fn header(c: &mut Ctx, invoice: &Invoice, shop_name: &str) {
+fn header(c: &mut Ctx, billing: &Billing, shop_name: &str) {
     c.y = 8.0;
     text_center(c, shop_name, TITLE_SIZE, c.y, &c.fonts.bold, INK);
     c.y += ROW_MM;
-    let id = invoice.id.to_string();
+    let id = billing.id.to_string();
     let no = format!("BILLING No. {}", id.get(..8).unwrap_or(&id));
     text_center(c, &no, SMALL_SIZE, c.y, &c.fonts.regular, DIM);
     c.y += 4.0;
@@ -116,36 +115,29 @@ fn header(c: &mut Ctx, invoice: &Invoice, shop_name: &str) {
     c.y += 3.0;
 }
 
-/// Amount formatting in the shop currency: THB converts via fx (falling back
-/// to raw ◎ when no rate is set), USDT shows the raw ◎ amount.
+/// Amount formatting in the shop pricing currency (line prices are already
+/// denominated in it — no conversion).
 struct MoneyFmt {
     symbol: &'static str,
-    fx: Decimal,
 }
 
 impl MoneyFmt {
-    fn new(currency: Currency, fx_thb_per_sol: Decimal) -> Self {
-        let converted = currency == Currency::Thb && fx_thb_per_sol > Decimal::ZERO;
+    fn new(currency: Currency) -> Self {
         Self {
-            symbol: if converted { "\u{0e3f}" } else { "\u{25c8}" },
-            fx: if converted {
-                fx_thb_per_sol
+            symbol: if currency == Currency::Thb {
+                "\u{0e3f}"
             } else {
-                Decimal::ONE
+                "$"
             },
         }
     }
 
-    fn amount(&self, v: Decimal) -> Decimal {
-        (v * self.fx).round_dp(2)
-    }
-
     fn fmt(&self, v: Decimal) -> String {
-        format!("{} {}", self.symbol, self.amount(v).normalize())
+        format!("{} {}", self.symbol, v.round_dp(2).normalize())
     }
 }
 
-fn items(c: &mut Ctx, invoice: &Invoice, money: &MoneyFmt) {
+fn items(c: &mut Ctx, billing: &Billing, money: &MoneyFmt) {
     text(
         c,
         "ITEM",
@@ -184,7 +176,7 @@ fn items(c: &mut Ctx, invoice: &Invoice, money: &MoneyFmt) {
     );
     c.y += ROW_MM + 1.0;
 
-    for line in &invoice.lines {
+    for line in &billing.lines {
         text(
             c,
             &line.name,
@@ -229,13 +221,13 @@ fn items(c: &mut Ctx, invoice: &Invoice, money: &MoneyFmt) {
     c.y += 3.0;
 }
 
-fn totals(c: &mut Ctx, invoice: &Invoice, money: &MoneyFmt) {
-    if invoice.vat_mode != VatMode::None {
-        summary_row(c, "Subtotal", invoice.subtotal(), money);
+fn totals(c: &mut Ctx, billing: &Billing, money: &MoneyFmt) {
+    if billing.vat_mode != VatMode::None {
+        summary_row(c, "Subtotal", billing.subtotal(), money);
         summary_row(
             c,
-            &format!("VAT {}%", invoice.vat_rate.normalize()),
-            invoice.vat_amount(),
+            &format!("VAT {}%", billing.vat_rate.normalize()),
+            billing.vat_amount(),
             money,
         );
     }
@@ -259,7 +251,7 @@ fn totals(c: &mut Ctx, invoice: &Invoice, money: &MoneyFmt) {
     );
     text_right(
         c,
-        &money.fmt(invoice.total()),
+        &money.fmt(billing.total()),
         12.0,
         CONTENT_RIGHT_MM - 1.5,
         c.y + 1.8,
@@ -267,7 +259,7 @@ fn totals(c: &mut Ctx, invoice: &Invoice, money: &MoneyFmt) {
         INK,
     );
     c.y += ROW_MM + 1.5;
-    summary_row(c, "cost basis", invoice.cost(), money);
+    summary_row(c, "cost basis", billing.cost(), money);
     c.y += 2.0;
     rule(c, c.y, DIM);
     c.y += 3.0;
@@ -295,7 +287,7 @@ fn summary_row(c: &mut Ctx, label: &str, amount: Decimal, money: &MoneyFmt) {
     c.y += ROW_MM;
 }
 
-fn qr_card(c: &mut Ctx, invoice: &Invoice, qr: &image_024::DynamicImage) {
+fn qr_card(c: &mut Ctx, billing: &Billing, qr: &image_024::DynamicImage) {
     text(
         c,
         "PAY TO",
@@ -307,7 +299,7 @@ fn qr_card(c: &mut Ctx, invoice: &Invoice, qr: &image_024::DynamicImage) {
     );
     text(
         c,
-        &format!("({})", invoice.destination.address.chain().as_str()),
+        &format!("({})", billing.destination.address.chain().as_str()),
         SMALL_SIZE,
         Mm(MARGIN_MM + 14.0),
         c.y,
@@ -317,7 +309,7 @@ fn qr_card(c: &mut Ctx, invoice: &Invoice, qr: &image_024::DynamicImage) {
     c.y += ROW_MM;
     wrap_text(
         c,
-        invoice.destination.address.as_str(),
+        billing.destination.address.as_str(),
         BODY_SIZE,
         MARGIN_MM,
         c.y,

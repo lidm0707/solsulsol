@@ -73,9 +73,9 @@ export async function uiSubscribe(page: Page) {
 export async function saveVideo(page: Page, name: string) {
   const video = page.video();
   if (!video) return;
-  await page.close();
   const out = path.join(__dirname, "..", "..", "videos");
   fs.mkdirSync(out, { recursive: true });
+  await page.context().close();
   await video.saveAs(path.join(out, `${name}.webm`));
 }
 

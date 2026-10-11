@@ -3,7 +3,7 @@
 
 use crate::config::PaymentConfig;
 use crate::domain::entities::subscription::{
-    MAX_SHOPS_PER_USER, PaymentOrder, PaymentOrderStatus, SUB_PRICE_USDC, Subscription,
+    BillingPeriod, MAX_SHOPS_PER_USER, PaymentOrder, PaymentOrderStatus, Subscription,
     SubscriptionStatus, USDC_DECIMALS,
 };
 use crate::domain::value_objects::new_id;
@@ -60,11 +60,16 @@ pub fn renewal_base(current: Option<Subscription>, now: DateTime<Utc>) -> DateTi
 }
 
 #[must_use]
-pub fn build_order(cfg: &PaymentConfig, user_id: Uuid, now: DateTime<Utc>) -> PaymentOrder {
+pub fn build_order(
+    cfg: &PaymentConfig,
+    user_id: Uuid,
+    period: BillingPeriod,
+    now: DateTime<Utc>,
+) -> PaymentOrder {
     PaymentOrder {
         id: new_id(),
         user_id,
-        amount: SUB_PRICE_USDC,
+        amount: period.price(),
         mint: cfg.usdc_mint.clone(),
         recipient: cfg.recipient.clone(),
         status: PaymentOrderStatus::Pending,
@@ -76,8 +81,12 @@ pub fn build_order(cfg: &PaymentConfig, user_id: Uuid, now: DateTime<Utc>) -> Pa
 
 /// Creates a fresh payment order from server-side config (price, mint,
 /// recipient). Client-supplied amounts are ignored by design.
-pub async fn create_order(svc: &AppServices, user_id: Uuid) -> Result<PaymentOrder, SubError> {
-    let order = build_order(&svc.payment_config, user_id, Utc::now());
+pub async fn create_order(
+    svc: &AppServices,
+    user_id: Uuid,
+    period: BillingPeriod,
+) -> Result<PaymentOrder, SubError> {
+    let order = build_order(&svc.payment_config, user_id, period, Utc::now());
     svc.orders.insert(&order).await?;
     tracing::info!(user_id = %user_id, order_id = %order.id, "payment order created");
     Ok(order)
@@ -131,20 +140,28 @@ pub async fn verify_order(
     if !marked {
         return Err(SubError::OrderAlreadyPaid);
     }
-    let sub = activate(svc, user_id, Utc::now()).await?;
+    let sub = activate(svc, user_id, Utc::now(), period_from_order(&order)).await?;
     tracing::info!(user_id = %user_id, order_id = %order.id, "payment verified, subscription active");
     Ok(sub)
 }
 
-/// Activates a new subscription or extends the existing one by a month.
+/// The plan an order buys; legacy orders predate yearly and are monthly.
+#[must_use]
+fn period_from_order(order: &PaymentOrder) -> BillingPeriod {
+    BillingPeriod::from_price(order.amount).unwrap_or(BillingPeriod::Monthly)
+}
+
+/// Activates a new subscription or extends the existing one by the bought
+/// period.
 async fn activate(
     svc: &AppServices,
     user_id: Uuid,
     now: DateTime<Utc>,
+    period: BillingPeriod,
 ) -> Result<Subscription, SubError> {
     let current = svc.subscriptions.find_by_user(user_id).await?;
     let start = renewal_base(current.clone(), now);
-    let expires = add_month(start);
+    let expires = period.advance(start);
     let sub = match current {
         Some(s) => Subscription {
             status: SubscriptionStatus::Active,
@@ -186,11 +203,12 @@ pub async fn require_active(svc: &AppServices, user_id: Uuid) -> Result<Subscrip
     }
 }
 
-/// Enforces the per-subscription shop limit.
+/// Enforces the per-subscription shop limit. Shop creation is free so users
+/// can onboard first; usage inside the shop is what the gate blocks.
 pub async fn ensure_can_create_shop(svc: &AppServices, user_id: Uuid) -> Result<(), SubError> {
-    require_active(svc, user_id).await?;
     let owned = svc.shops.find_for_user(user_id).await?;
-    if owned.len() >= MAX_SHOPS_PER_USER {
+    let owned_count = owned.iter().filter(|s| s.owner_id == user_id).count();
+    if owned_count >= MAX_SHOPS_PER_USER {
         return Err(SubError::QuotaShops);
     }
     Ok(())
@@ -206,6 +224,19 @@ pub async fn record_storage(
     use crate::domain::entities::subscription::MAX_STORAGE_BYTES;
     svc.storage
         .add_checked(shop_id, key, bytes, MAX_STORAGE_BYTES)
+        .await
+        .map_err(SubError::from)
+}
+
+/// `(key, bytes)` objects recorded against the shop quota.
+pub async fn list_storage(svc: &AppServices, shop_id: Uuid) -> Result<Vec<(Uuid, i64)>, SubError> {
+    svc.storage.list(shop_id).await.map_err(SubError::from)
+}
+
+/// Frees a storage object's bytes; returns the shop total after removal.
+pub async fn remove_storage(svc: &AppServices, shop_id: Uuid, key: Uuid) -> Result<i64, SubError> {
+    svc.storage
+        .remove(shop_id, key)
         .await
         .map_err(SubError::from)
 }

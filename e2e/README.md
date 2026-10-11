@@ -7,8 +7,9 @@ Playwright tests against `docker/docker-compose.e2e.yml`. Uses **yarn**.
 - `specs/cloudflare_flow.spec.ts` — same API flow against the Cloudflare Worker under `docker/docker-compose.cloudflare-e2e.yml` (`wrangler dev` + local D1, port 18787). JSON snapshots per step to `snapshots/cloudflare_flow/`, captures (health response, worker-served UI screenshot) to `captures/cloudflare_flow/`. No PDF steps (pdf endpoints are non-wasm). See "Cloudflare worker e2e" below.
 - `specs/phantom_extension.spec.ts` — real Chrome + real Phantom extension (headless, `channel: chromium` + `--headless=new`): runs the full onboarding (Create a New Wallet → Recovery Phrase Wallet → password + ToS), captures each step to `captures/phantom_extension/`, and asserts `window.phantom.solana` is injected into the POS UI page. Wallet profile persists in `e2e/.phantom/profile`; address saved to `e2e/.phantom/test-wallet-address.txt`. First run creates the wallet (~18s); later runs reuse it
 
-Note: current Phantom versions no longer show the seed phrase during onboarding — backup is a later in-wallet task. `seed captured: 0 words` is expected.
+- `specs/demo_human_flow.spec.ts` — same full workflow as `full_workflow` but paced like a real human (char-by-char typing, mouse moves, step pauses) and saved as `videos/demo_human_flow.webm`. Tune pacing with `HUMAN_SPEED` / `HUMAN_TYPE_SPEED` (ms). Run alone: `cd e2e && npx playwright test demo_human_flow`
 
+Note: current Phantom versions no longer show the seed phrase during onboarding — backup is a later in-wallet task. `seed captured: 0 words` is expected.
 ## Run
 
 ```sh

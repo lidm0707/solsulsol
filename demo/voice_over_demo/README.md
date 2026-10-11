@@ -32,8 +32,11 @@ cargo run --release -- \
 - Notes and words are length-checked against each other.
 
 Options: `--tempo` (30–300 BPM), `--sample-rate` (default 44100),
-`--vibrato-rate` (Hz), `--vibrato-depth` (cents), `--vibrato-delay` (fraction
-of note), `--portamento-ms`, `--breathiness` (0–1).
+`--voice` (`neutral` | `anime` — anime raises formants ×1.18 for a shorter,
+younger vocal tract, adds a bright 4th formant, softens consonants for a
+legato syllabic feel, more breath, and faster vibrato), `--vibrato-rate` (Hz), `--vibrato-depth` (cents), `--vibrato-delay`
+(fraction of note), `--portamento-ms`, `--breathiness` (0–1). Per-flag values
+default from the chosen `--voice` preset when omitted.
 
 ## Requirements
 
@@ -63,6 +66,15 @@ Machine check (whisper.cpp, tiny.en + base.en): output is classified as
 "*sings*"/music, not transcribed — expected: formant-synth singing is outside
 ASR training data, and the control test showed whisper can't even transcribe
 pitch-shifted natural speech. Structural checks pass:
+
+Analyze any WAV (including TTS references made with macOS `say`):
+
+```sh
+cargo run --release -- --stats-file ref_kyoko.wav
+```
+
+Comparison against real TTS voices (Kyoko ja = anime-accent English,
+Samantha en_US) is in `bench/synth-vs-reference.md`.
 
 - Autocorrelation of the vowel segment: f0 ≈ 220.5 Hz for an A3 note ✓
 - Energy envelope of "hello": /h/ 0–0.25s, /e/ 0.25–2.0s, /l/ dip 2.0–2.25s,

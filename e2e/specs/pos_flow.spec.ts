@@ -185,12 +185,15 @@ test("wallet auth → subscribe → shop → invite → goods → checkout → P
   expect(pdf.headers()["content-type"]).toBe("application/pdf");
   expect(bytes.subarray(0, 4)).toEqual(Buffer.from("%PDF"));
 
-  // 17: shop creation without an active subscription is 403
+  // 17: shop creation without a subscription succeeds (free), but the quota
+  // still applies — the second shop is rejected.
   const noSub = await apiAuth(api, Keypair.generate());
-  const blocked = await api("POST", "/shops", noSub.token, { name: "No Sub Cafe" });
+  const freeShop = await api("POST", "/shops", noSub.token, { name: "No Sub Cafe" });
+  expect(freeShop.status()).toBe(200);
+  const blocked = await api("POST", "/shops", noSub.token, { name: "No Sub Cafe 2" });
   snapshot("create-shop-without-subscription", {
     status: blocked.status(),
     body: await blocked.json().catch(() => null),
   });
-  expect(blocked.status()).toBe(403);
+  expect(blocked.status()).toBe(400);
 });

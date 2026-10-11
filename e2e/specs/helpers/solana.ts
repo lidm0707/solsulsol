@@ -8,12 +8,14 @@ import {
   Keypair,
   LAMPORTS_PER_SOL,
   PublicKey,
+  Transaction,
+  TransactionInstruction,
 } from "@solana/web3.js";
 import {
   createAssociatedTokenAccountIdempotent,
   createMint,
+  createTransferCheckedInstruction,
   mintTo,
-  transferChecked,
 } from "@solana/spl-token";
 
 export const SURFPOOL = process.env.SURFPOOL ?? "http://localhost:8899";
@@ -28,6 +30,8 @@ const nacl = require("tweetnacl");
 const bs58 = require("bs58").default;
 
 const TOKEN_PROGRAM = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+const SPL_TOKEN_PROGRAM = TOKEN_PROGRAM;
+const MEMO_PROGRAM = new PublicKey("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr");
 const ATA_PROGRAM = new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
 
 export function loadKeypair(name: string): Keypair {
@@ -88,23 +92,41 @@ export async function ensureUsdc(c: Connection): Promise<PublicKey> {
   return mint;
 }
 
-/** Pays one $1 subscription: payer → configured recipient. Returns the signature. */
-export async function paySubscription(c: Connection): Promise<string> {
+/** Pays one subscription: `minorUsdc` × 1e-6 USDC, payer → recipient.
+ * A unique memo makes each transaction distinct — identical transfers inside
+ * one blockhash window collide on the surfpool ("already been processed"). */
+export async function paySubscriptionAmount(c: Connection, minorUsdc: bigint): Promise<string> {
   const p = payer();
   const mint = usdcMint();
   const dest = recipient();
   const destAta = await createAssociatedTokenAccountIdempotent(c, p, mint, dest.publicKey);
-  return transferChecked(
-    c,
-    p,
-    ataOf(p.publicKey, mint),
-    mint,
-    destAta,
-    p.publicKey,
-    SUB_USDC,
-    6,
-    [p, dest],
+  const tx = new Transaction().add(
+    new TransactionInstruction({
+      programId: MEMO_PROGRAM,
+      keys: [],
+      data: Buffer.from(`e2e-${Date.now()}-${Math.random()}`),
+    }),
+    createTransferCheckedInstruction(
+      ataOf(p.publicKey, mint),
+      mint,
+      destAta,
+      p.publicKey,
+      minorUsdc,
+      6,
+      [],
+      SPL_TOKEN_PROGRAM,
+    ),
   );
+  tx.feePayer = p.publicKey;
+  const { blockhash } = await c.getLatestBlockhash("confirmed");
+  tx.recentBlockhash = blockhash;
+  tx.sign(p);
+  return c.sendRawTransaction(tx.serialize(), { skipPreflight: false });
+}
+
+/** Pays one $1 subscription: payer → configured recipient. Returns the signature. */
+export async function paySubscription(c: Connection): Promise<string> {
+  return paySubscriptionAmount(c, SUB_USDC);
 }
 
 /** Wallet sign-in over the API: nonce → sign the server's message → verify. */

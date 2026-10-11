@@ -8,13 +8,13 @@ use crate::domain::entities::subscription::{
     AuthNonce, PaymentOrder, PaymentOrderStatus, Subscription, SubscriptionStatus,
 };
 use crate::domain::entities::{
-    Currency, Goods, Invite, InviteStatus, Invoice, InvoiceLine, InvoiceStatus, PaymentDestination,
+    Billing, BillingLine, BillingStatus, Currency, Goods, Invite, InviteStatus, PaymentDestination,
     Shop, ShopMember, User, VatMode,
 };
 use crate::domain::value_objects::{Chain, ChainAddress, Email, Money, Role, SplToken, Wallet};
 use crate::domain::value_objects::{GoodsIcon, GoodsType, PastelColor};
 use crate::port::database::{
-    DestinationRepo, GoodsRepo, InviteRepo, InvoiceRepo, NonceRepo, PaymentOrderRepo,
+    BillingRepo, DestinationRepo, GoodsRepo, InviteRepo, NonceRepo, PaymentOrderRepo,
     ShopMemberRepo, ShopRepo, StorageError, StorageUsageRepo, SubscriptionRepo, Tx, TxManager,
     UserRepo,
 };
@@ -110,14 +110,14 @@ type ShopTuple = (
 );
 
 fn shop_row(row: ShopTuple) -> Shop {
-    let (id, owner_id, name, vat_mode, vat_rate, fx_thb_per_sol, currency, deleted_at) = row;
+    let (id, owner_id, name, vat_mode, vat_rate, fx_thb_per_usd, currency, deleted_at) = row;
     Shop {
         id,
         owner_id,
         name,
         vat_mode: VatMode::parse(&vat_mode).unwrap_or_default(),
         vat_rate,
-        fx_thb_per_sol,
+        fx_thb_per_usd,
         currency: Currency::parse(&currency).unwrap_or_default(),
         deleted_at,
     }
@@ -127,14 +127,14 @@ fn shop_row(row: ShopTuple) -> Shop {
 impl ShopRepo for PgShopRepo {
     async fn insert(&self, shop: &Shop) -> Result<(), String> {
         sqlx::query(
-            "INSERT INTO shops (id, owner_id, name, vat_mode, vat_rate, fx_thb_per_sol, currency, deleted_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+            "INSERT INTO shops (id, owner_id, name, vat_mode, vat_rate, fx_thb_per_usd, currency, deleted_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
         )
         .bind(shop.id)
         .bind(shop.owner_id)
         .bind(&shop.name)
         .bind(shop.vat_mode.as_str())
         .bind(shop.vat_rate)
-        .bind(shop.fx_thb_per_sol)
+        .bind(shop.fx_thb_per_usd)
         .bind(shop.currency.as_str())
         .bind(shop.deleted_at)
         .execute(&self.pool)
@@ -145,7 +145,7 @@ impl ShopRepo for PgShopRepo {
 
     async fn find_by_id(&self, id: uuid::Uuid) -> Result<Option<Shop>, String> {
         let row: Option<ShopTuple> = sqlx::query_as(
-            "SELECT id, owner_id, name, vat_mode, vat_rate, fx_thb_per_sol, currency, deleted_at FROM shops \
+            "SELECT id, owner_id, name, vat_mode, vat_rate, fx_thb_per_usd, currency, deleted_at FROM shops \
              WHERE id = $1 AND deleted_at IS NULL",
         )
         .bind(id)
@@ -157,7 +157,7 @@ impl ShopRepo for PgShopRepo {
 
     async fn find_for_user(&self, user_id: uuid::Uuid) -> Result<Vec<Shop>, String> {
         let rows: Vec<ShopTuple> = sqlx::query_as(
-            "SELECT s.id, s.owner_id, s.name, s.vat_mode, s.vat_rate, s.fx_thb_per_sol, s.currency, s.deleted_at \
+            "SELECT s.id, s.owner_id, s.name, s.vat_mode, s.vat_rate, s.fx_thb_per_usd, s.currency, s.deleted_at \
              FROM shops s JOIN shop_members m ON m.shop_id = s.id \
              WHERE m.user_id = $1 AND s.deleted_at IS NULL",
         )
@@ -173,16 +173,16 @@ impl ShopRepo for PgShopRepo {
         id: uuid::Uuid,
         vat_mode: VatMode,
         vat_rate: Decimal,
-        fx_thb_per_sol: Decimal,
+        fx_thb_per_usd: Decimal,
         currency: Currency,
     ) -> Result<(), String> {
         sqlx::query(
-            "UPDATE shops SET vat_mode = $2, vat_rate = $3, fx_thb_per_sol = $4, currency = $5 WHERE id = $1",
+            "UPDATE shops SET vat_mode = $2, vat_rate = $3, fx_thb_per_usd = $4, currency = $5 WHERE id = $1",
         )
         .bind(id)
         .bind(vat_mode.as_str())
         .bind(vat_rate)
-        .bind(fx_thb_per_sol)
+        .bind(fx_thb_per_usd)
         .bind(currency.as_str())
         .execute(&self.pool)
         .await
@@ -366,6 +366,26 @@ impl GoodsRepo for PgGoodsRepo {
         }
         Ok(())
     }
+
+    async fn find_by_id(&self, goods_id: uuid::Uuid) -> Result<Option<Goods>, String> {
+        let rows: Vec<GoodsTuple> = sqlx::query_as(
+            "SELECT id, shop_id, name, price, cost, units, barcode, icon, color, goods_type FROM goods WHERE id = $1",
+        )
+        .bind(goods_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(rows.into_iter().next().map(goods_row))
+    }
+
+    async fn delete(&self, goods_id: uuid::Uuid) -> Result<(), String> {
+        sqlx::query("DELETE FROM goods WHERE id = $1")
+            .bind(goods_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
 }
 
 pub struct PgDestinationRepo {
@@ -511,49 +531,63 @@ impl InviteRepo for PgInviteRepo {
     }
 }
 
-pub struct PgInvoiceRepo {
+pub struct PgBillingRepo {
     pub pool: PgPool,
 }
 
-type InvoiceTuple = (uuid::Uuid, uuid::Uuid, String, uuid::Uuid, String, Decimal);
+type BillingTuple = (uuid::Uuid, uuid::Uuid, String, uuid::Uuid, String, Decimal);
 
-fn invoice_row(
-    row: InvoiceTuple,
+fn billing_row(
+    row: BillingTuple,
 ) -> (
     uuid::Uuid,
     uuid::Uuid,
-    InvoiceStatus,
+    BillingStatus,
     uuid::Uuid,
     VatMode,
     Decimal,
 ) {
     let (id, shop_id, status, destination_id, vat_mode, vat_rate) = row;
-    let status = InvoiceStatus::parse(&status).unwrap_or(InvoiceStatus::Pending);
+    let status = BillingStatus::parse(&status).unwrap_or(BillingStatus::Pending);
     let vat_mode = VatMode::parse(&vat_mode).unwrap_or_default();
     (id, shop_id, status, destination_id, vat_mode, vat_rate)
 }
 
 #[async_trait]
-impl InvoiceRepo for PgInvoiceRepo {
-    async fn insert(&self, invoice: &Invoice) -> Result<(), String> {
+impl BillingRepo for PgBillingRepo {
+    async fn hard_delete_expired(
+        &self,
+        before: chrono::DateTime<chrono::Utc>,
+    ) -> Result<u64, String> {
+        let res = sqlx::query(
+            "DELETE FROM billings WHERE shop_id IN (SELECT id FROM shops WHERE deleted_at IS NOT NULL AND deleted_at < $1)",
+        )
+        .bind(before)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(res.rows_affected())
+    }
+
+    async fn insert(&self, billing: &Billing) -> Result<(), String> {
         let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
         sqlx::query(
-            "INSERT INTO invoices (id, shop_id, status, destination_id, vat_mode, vat_rate) VALUES ($1, $2, $3, $4, $5, $6)",
+            "INSERT INTO billings (id, shop_id, status, destination_id, vat_mode, vat_rate) VALUES ($1, $2, $3, $4, $5, $6)",
         )
-        .bind(invoice.id)
-        .bind(invoice.shop_id)
-        .bind(invoice.status.as_str())
-        .bind(invoice.destination.id)
-        .bind(invoice.vat_mode.as_str())
-        .bind(invoice.vat_rate)
+        .bind(billing.id)
+        .bind(billing.shop_id)
+        .bind(billing.status.as_str())
+        .bind(billing.destination.id)
+        .bind(billing.vat_mode.as_str())
+        .bind(billing.vat_rate)
         .execute(&mut *tx)
         .await
         .map_err(|e| e.to_string())?;
-        for line in &invoice.lines {
+        for line in &billing.lines {
             sqlx::query(
-                "INSERT INTO invoice_lines (invoice_id, goods_id, name, price, cost, qty) VALUES ($1, $2, $3, $4, $5, $6)",
+                "INSERT INTO billing_lines (billing_id, goods_id, name, price, cost, qty) VALUES ($1, $2, $3, $4, $5, $6)",
             )
-            .bind(invoice.id)
+            .bind(billing.id)
             .bind(line.goods_id)
             .bind(&line.name)
             .bind(line.price.amount())
@@ -567,20 +601,20 @@ impl InvoiceRepo for PgInvoiceRepo {
         Ok(())
     }
 
-    async fn find_by_id(&self, id: uuid::Uuid) -> Result<Option<Invoice>, String> {
-        let row: Option<InvoiceTuple> = sqlx::query_as(
-            "SELECT id, shop_id, status, destination_id, vat_mode, vat_rate FROM invoices WHERE id = $1",
+    async fn find_by_id(&self, id: uuid::Uuid) -> Result<Option<Billing>, String> {
+        let row: Option<BillingTuple> = sqlx::query_as(
+            "SELECT id, shop_id, status, destination_id, vat_mode, vat_rate FROM billings WHERE id = $1",
         )
         .bind(id)
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| e.to_string())?;
-        let Some((id, shop_id, status, dest_id, vat_mode, vat_rate)) = row.map(invoice_row) else {
+        let Some((id, shop_id, status, dest_id, vat_mode, vat_rate)) = row.map(billing_row) else {
             return Ok(None);
         };
         let destination = fetch_destination(&self.pool, dest_id).await?;
         let lines = fetch_lines(&self.pool, id).await?;
-        Ok(Some(Invoice {
+        Ok(Some(Billing {
             id,
             shop_id,
             status,
@@ -591,20 +625,20 @@ impl InvoiceRepo for PgInvoiceRepo {
         }))
     }
 
-    async fn list_by_shop(&self, shop_id: uuid::Uuid) -> Result<Vec<Invoice>, String> {
-        let rows: Vec<InvoiceTuple> = sqlx::query_as(
-            "SELECT id, shop_id, status, destination_id, vat_mode, vat_rate FROM invoices WHERE shop_id = $1",
+    async fn list_by_shop(&self, shop_id: uuid::Uuid) -> Result<Vec<Billing>, String> {
+        let rows: Vec<BillingTuple> = sqlx::query_as(
+            "SELECT id, shop_id, status, destination_id, vat_mode, vat_rate FROM billings WHERE shop_id = $1",
         )
         .bind(shop_id)
         .fetch_all(&self.pool)
         .await
         .map_err(|e| e.to_string())?;
         let mut out = Vec::with_capacity(rows.len());
-        for (id, _shop_id, status, dest_id, vat_mode, vat_rate) in rows.into_iter().map(invoice_row)
+        for (id, _shop_id, status, dest_id, vat_mode, vat_rate) in rows.into_iter().map(billing_row)
         {
             let destination = fetch_destination(&self.pool, dest_id).await?;
             let lines = fetch_lines(&self.pool, id).await?;
-            out.push(Invoice {
+            out.push(Billing {
                 id,
                 shop_id,
                 status,
@@ -619,8 +653,8 @@ impl InvoiceRepo for PgInvoiceRepo {
 
     async fn sales_by_goods(&self, shop_id: uuid::Uuid) -> Result<Vec<(uuid::Uuid, u64)>, String> {
         let rows: Vec<(uuid::Uuid, i64)> = sqlx::query_as(
-            "SELECT l.goods_id, SUM(l.qty) FROM invoice_lines l \
-             JOIN invoices i ON i.id = l.invoice_id \
+            "SELECT l.goods_id, SUM(l.qty) FROM billing_lines l \
+             JOIN billings i ON i.id = l.billing_id \
              WHERE i.shop_id = $1 AND i.status = 'paid' \
              GROUP BY l.goods_id ORDER BY SUM(l.qty) DESC",
         )
@@ -632,6 +666,15 @@ impl InvoiceRepo for PgInvoiceRepo {
             .into_iter()
             .map(|(id, qty)| (id, u64::try_from(qty).unwrap_or(0)))
             .collect())
+    }
+
+    async fn goods_has_lines(&self, goods_id: uuid::Uuid) -> Result<bool, String> {
+        let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM billing_lines WHERE goods_id = $1")
+            .bind(goods_id)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(row.0 > 0)
     }
 }
 
@@ -651,7 +694,7 @@ async fn fetch_destination(
                 id: NIL,
                 shop_id: NIL,
                 address: addr,
-                token: SplToken::Sol,
+                token: SplToken::default(),
             })
             .map_err(|_| String::from("const fallback address must parse"));
     };
@@ -667,8 +710,8 @@ async fn fetch_destination(
 
 async fn fetch_lines(
     pool: &sqlx::PgPool,
-    invoice_id: uuid::Uuid,
-) -> Result<Vec<InvoiceLine>, String> {
+    billing_id: uuid::Uuid,
+) -> Result<Vec<BillingLine>, String> {
     let rows: Vec<(
         uuid::Uuid,
         String,
@@ -676,15 +719,15 @@ async fn fetch_lines(
         rust_decimal::Decimal,
         i64,
     )> = sqlx::query_as(
-        "SELECT goods_id, name, price, cost, qty FROM invoice_lines WHERE invoice_id = $1",
+        "SELECT goods_id, name, price, cost, qty FROM billing_lines WHERE billing_id = $1",
     )
-    .bind(invoice_id)
+    .bind(billing_id)
     .fetch_all(pool)
     .await
     .map_err(|e| e.to_string())?;
     Ok(rows
         .into_iter()
-        .map(|(goods_id, name, price, cost, qty)| InvoiceLine {
+        .map(|(goods_id, name, price, cost, qty)| BillingLine {
             goods_id,
             name,
             price: Money::new(price).unwrap_or_else(|_| Money::one()),
@@ -882,7 +925,7 @@ impl SubscriptionRepo for PgSubscriptionRepo {
     ) -> Result<Vec<Subscription>, String> {
         let rows: Vec<SubTuple> = sqlx::query_as(&format!(
             "SELECT {SUB_COLUMNS} FROM subscriptions \
-             WHERE status = 'lapsed' AND grace_until <= $1"
+             WHERE status IN ('lapsed', 'deleted') AND grace_until <= $1"
         ))
         .bind(before)
         .fetch_all(&self.pool)
@@ -1054,5 +1097,25 @@ impl StorageUsageRepo for PgStorageRepo {
             .await
             .map_err(|e| e.to_string())?;
         Ok(total.0)
+    }
+
+    async fn list(&self, shop_id: uuid::Uuid) -> Result<Vec<(uuid::Uuid, i64)>, StorageError> {
+        let rows: Vec<(uuid::Uuid, i64)> =
+            sqlx::query_as("SELECT key, bytes FROM storage_files WHERE shop_id = $1 ORDER BY key")
+                .bind(shop_id)
+                .fetch_all(&self.pool)
+                .await
+                .map_err(|e| e.to_string())?;
+        Ok(rows)
+    }
+
+    async fn remove(&self, shop_id: uuid::Uuid, key: uuid::Uuid) -> Result<i64, StorageError> {
+        sqlx::query("DELETE FROM storage_files WHERE shop_id = $1 AND key = $2")
+            .bind(shop_id)
+            .bind(key)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        self.total(shop_id).await
     }
 }

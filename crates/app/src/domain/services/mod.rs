@@ -1,6 +1,6 @@
 //! Domain services: pure business rules, no I/O here.
 
-use crate::domain::entities::{Invite, Invoice, Order, ShopMember, User};
+use crate::domain::entities::{Invite, Billing, Order, ShopMember, User};
 use crate::domain::value_objects::Role;
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
@@ -70,14 +70,14 @@ pub fn validate_order(order: &Order) -> Result<Decimal, DomainRuleError> {
     Ok(order.total())
 }
 
-/// A pending invoice may transition to paid or cancelled only.
-pub fn invoice_can_transition(
-    invoice: &Invoice,
-    target: crate::domain::entities::InvoiceStatus,
+/// A pending billing may transition to paid or cancelled only.
+pub fn billing_can_transition(
+    billing: &Billing,
+    target: crate::domain::entities::BillingStatus,
 ) -> bool {
-    use crate::domain::entities::InvoiceStatus::*;
+    use crate::domain::entities::BillingStatus::*;
     matches!(
-        (invoice.status, target),
+        (billing.status, target),
         (Pending, Paid) | (Pending, Cancelled)
     )
 }

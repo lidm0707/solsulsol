@@ -1,0 +1,5 @@
+Solsulsol — a Solana point of sale in your browser.
+Create a shop. Add goods with prices.
+Choose how you get paid. Solana, USDC, or PromptPay.
+Ring up a sale in one tap.
+The customer scans, pays, and funds land instantly.

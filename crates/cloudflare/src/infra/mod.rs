@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use crate::infra::adapters::{JwtIssuer, PromptPayAdapter, QrAdapter};
 use crate::infra::d1_repos::{
-    D1DestinationRepo, D1GoodsRepo, D1InviteRepo, D1InvoiceRepo, D1MemberRepo, D1NonceRepo,
+    D1BillingRepo, D1DestinationRepo, D1GoodsRepo, D1InviteRepo, D1MemberRepo, D1NonceRepo,
     D1PaymentOrderRepo, D1ShopRepo, D1StorageRepo, D1SubscriptionRepo, D1UserRepo,
 };
 use crate::infra::solana::{Ed25519Verifier, RpcPaymentVerifier};
@@ -61,12 +61,12 @@ pub fn payment_config(env: &worker::Env) -> Result<PaymentConfig, String> {
             format!("https://api.{}.solana.com", pos_app::config::NETWORK_DEVNET)
         }),
         usdc_mint: env_var(env, VAR_USDC_MINT)?
-            .unwrap_or_else(|| pos_app::config::USDC_MINT_DEVNET.to_owned()),
+            .unwrap_or_else(|| pos_app::config::USDC_MINT_MAINNET.to_owned()),
         recipient,
         price_usdc: price,
         domain: env_var(env, VAR_DOMAIN)?.unwrap_or_else(|| "localhost".to_owned()),
         nonce_ttl_secs: env_i64(env, VAR_NONCE_TTL, 300)?,
-        grace_days: env_i64(env, VAR_GRACE_DAYS, 30)?,
+        grace_days: env_i64(env, VAR_GRACE_DAYS, 7)?,
         recovery_days: env_i64(env, VAR_RECOVERY_DAYS, 7)?,
     })
 }
@@ -86,7 +86,7 @@ pub fn wire_services(env: &worker::Env) -> Result<AppServices, String> {
         .goods(Arc::new(D1GoodsRepo { db: db.clone() }))
         .destinations(Arc::new(D1DestinationRepo { db: db.clone() }))
         .invites(Arc::new(D1InviteRepo { db: db.clone() }))
-        .invoices(Arc::new(D1InvoiceRepo { db: db.clone() }))
+        .billings(Arc::new(D1BillingRepo { db: db.clone() }))
         .nonces(Arc::new(D1NonceRepo { db: db.clone() }))
         .subscriptions(Arc::new(D1SubscriptionRepo { db: db.clone() }))
         .orders(Arc::new(D1PaymentOrderRepo { db: db.clone() }))

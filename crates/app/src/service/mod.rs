@@ -3,7 +3,7 @@
 pub mod auth;
 pub mod destination;
 pub mod goods;
-pub mod invoice;
+pub mod billing;
 pub mod maintenance;
 pub mod shop;
 pub mod subscription;

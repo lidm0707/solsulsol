@@ -4,7 +4,7 @@ use crate::domain::entities::subscription::{
     AuthNonce, PaymentOrder, Subscription, SubscriptionStatus,
 };
 use crate::domain::entities::{
-    Currency, Goods, Invite, InviteStatus, Invoice, PaymentDestination, Shop, ShopMember, User,
+    Billing, Currency, Goods, Invite, InviteStatus, PaymentDestination, Shop, ShopMember, User,
     VatMode,
 };
 use crate::domain::value_objects::Role;
@@ -47,7 +47,9 @@ pub trait SubscriptionRepo: Send + Sync {
         &self,
         now: chrono::DateTime<chrono::Utc>,
     ) -> Result<Vec<Subscription>, String>;
-    /// Lapsed subs past the recovery window; candidates for hard deletion.
+    /// Lapsed or already-Deleted subs past the recovery window; candidates
+    /// for hard deletion (Deleted included so the shop purge still runs when
+    /// the sub was marked Deleted before its shops became purge-eligible).
     async fn list_to_delete(
         &self,
         now: chrono::DateTime<chrono::Utc>,
@@ -87,6 +89,10 @@ pub trait StorageUsageRepo: Send + Sync {
         quota: i64,
     ) -> Result<i64, StorageError>;
     async fn total(&self, shop_id: Uuid) -> Result<i64, StorageError>;
+    /// `(key, bytes)` per recorded object, ascending by key.
+    async fn list(&self, shop_id: Uuid) -> Result<Vec<(Uuid, i64)>, StorageError>;
+    /// Removes the usage row; returns the shop total after removal.
+    async fn remove(&self, shop_id: Uuid, key: Uuid) -> Result<i64, StorageError>;
 }
 
 #[derive(Debug)]
@@ -113,7 +119,7 @@ pub trait ShopRepo: Send + Sync {
         _id: Uuid,
         _vat_mode: VatMode,
         _vat_rate: Decimal,
-        _fx_thb_per_sol: Decimal,
+        _fx_thb_per_usd: Decimal,
         _currency: Currency,
     ) -> Result<(), String> {
         Err("shop settings not supported".into())
@@ -149,6 +155,8 @@ pub trait ShopMemberRepo: Send + Sync {
 pub trait GoodsRepo: Send + Sync {
     async fn insert(&self, goods: &Goods) -> Result<(), String>;
     async fn find_by_shop(&self, shop_id: Uuid) -> Result<Vec<Goods>, String>;
+    async fn find_by_id(&self, goods_id: Uuid) -> Result<Option<Goods>, String>;
+    async fn delete(&self, goods_id: Uuid) -> Result<(), String>;
     /// Removes one unit from stock; errors when the goods is out of stock.
     async fn take_units(&self, goods_id: Uuid) -> Result<(), String>;
 }
@@ -170,12 +178,20 @@ pub trait InviteRepo: Send + Sync {
 }
 
 #[async_trait]
-pub trait InvoiceRepo: Send + Sync {
-    async fn insert(&self, invoice: &Invoice) -> Result<(), String>;
-    async fn find_by_id(&self, id: Uuid) -> Result<Option<Invoice>, String>;
-    async fn list_by_shop(&self, shop_id: Uuid) -> Result<Vec<Invoice>, String>;
-    /// Sold quantity per goods (paid invoices only), best-sell first source.
+pub trait BillingRepo: Send + Sync {
+    async fn insert(&self, billing: &Billing) -> Result<(), String>;
+    async fn find_by_id(&self, id: Uuid) -> Result<Option<Billing>, String>;
+    async fn list_by_shop(&self, shop_id: Uuid) -> Result<Vec<Billing>, String>;
+    /// Sold quantity per goods (paid billings only), best-sell first source.
     async fn sales_by_goods(&self, shop_id: Uuid) -> Result<Vec<(Uuid, u64)>, String>;
+    /// Whether any billing line (paid or not) references the goods.
+    async fn goods_has_lines(&self, goods_id: Uuid) -> Result<bool, String>;
+    /// Deletes billings of shops soft-deleted before `before`. Runs before the
+    /// shops purge — billings have no ON DELETE CASCADE on shop_id.
+    async fn hard_delete_expired(
+        &self,
+        before: chrono::DateTime<chrono::Utc>,
+    ) -> Result<u64, String>;
 }
 
 /// Transaction port: services open scoped transactions and commit/rollback.

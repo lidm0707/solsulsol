@@ -189,19 +189,18 @@ test(`${FLOW}`, async ({ playwright }) => {
     }
     await expect(pos.locator('[aria-label="new-shop"]')).toBeVisible({ timeout: 20_000 });
 
-    // $1/mo subscription — no tabbar before a shop exists; the subscription
-    // payment comes from the surfpool test payer (extension wallet secret is
-    // locked, and it has no USDC anyway)
+    // Creation is free; the subscription is paid inside the shop after
+    // entering (extension wallet secret is locked, no USDC anyway).
     await pos.locator('[aria-label="new-shop"]').click();
-    await expect(pos.locator(".modal-overlay")).toContainText("Subscription required", { timeout: 15_000 });
-    await uiSubscribe(pos);
-
     await expect(pos.locator('input[placeholder="new shop name"]')).toBeVisible({ timeout: 20_000 });
     await pos.locator('input[placeholder="new shop name"]').fill("Ext Cafe");
     await pos.locator('[aria-label="create-shop"]').click();
-    const chip = pos.locator(".shop-chip", { hasText: "Ext Cafe" });
-    await expect(chip).toBeVisible({ timeout: 15_000 });
-    await chip.click();
+    // Unpaid: the gate blocks entry and shows over the shop list.
+    await expect(pos.locator(".modal-overlay")).toContainText("Subscription required", {
+      timeout: 15_000,
+    });
+    await uiSubscribe(pos);
+    await expect(pos.locator(".modal-overlay")).toHaveCount(0, { timeout: 20_000 });
     await expect(pos.locator('[aria-label="tab-goods"]')).toBeVisible({ timeout: 15_000 });
     await pos.locator('[aria-label="tab-goods"]').click();
     await pos.locator('[aria-label="create-goods"]').click();

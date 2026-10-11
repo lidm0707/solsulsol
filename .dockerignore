@@ -1,0 +1,12 @@
+target/
+.git/
+.env
+.env.*
+*.md
+docker/
+!docker/migrations
+e2e/
+.plans/
+bench/
+crates/ui/ui_wasm/dist/
+node_modules/

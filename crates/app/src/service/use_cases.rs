@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use crate::config::PaymentConfig;
 use crate::port::database::{
-    DestinationRepo, GoodsRepo, InviteRepo, InvoiceRepo, NonceRepo, PaymentOrderRepo,
+    DestinationRepo, GoodsRepo, InviteRepo, BillingRepo, NonceRepo, PaymentOrderRepo,
     ShopMemberRepo, ShopRepo, StorageUsageRepo, SubscriptionRepo, TxManager, UserRepo,
 };
 use crate::port::encryption::TokenIssuer;
@@ -23,7 +23,7 @@ pub struct AppServices {
     pub goods: Arc<dyn GoodsRepo>,
     pub destinations: Arc<dyn DestinationRepo>,
     pub invites: Arc<dyn InviteRepo>,
-    pub invoices: Arc<dyn InvoiceRepo>,
+    pub billings: Arc<dyn BillingRepo>,
     pub nonces: Arc<dyn NonceRepo>,
     pub subscriptions: Arc<dyn SubscriptionRepo>,
     pub orders: Arc<dyn PaymentOrderRepo>,
@@ -81,7 +81,7 @@ pub struct AppServicesBuilder {
     goods: Option<Arc<dyn GoodsRepo>>,
     destinations: Option<Arc<dyn DestinationRepo>>,
     invites: Option<Arc<dyn InviteRepo>>,
-    invoices: Option<Arc<dyn InvoiceRepo>>,
+    billings: Option<Arc<dyn BillingRepo>>,
     nonces: Option<Arc<dyn NonceRepo>>,
     subscriptions: Option<Arc<dyn SubscriptionRepo>>,
     orders: Option<Arc<dyn PaymentOrderRepo>>,
@@ -112,7 +112,7 @@ impl AppServicesBuilder {
     setter!(goods, goods, GoodsRepo);
     setter!(destinations, destinations, DestinationRepo);
     setter!(invites, invites, InviteRepo);
-    setter!(invoices, invoices, InvoiceRepo);
+    setter!(billings, billings, BillingRepo);
     setter!(nonces, nonces, NonceRepo);
     setter!(subscriptions, subscriptions, SubscriptionRepo);
     setter!(orders, orders, PaymentOrderRepo);
@@ -134,7 +134,7 @@ impl AppServicesBuilder {
             goods: self.goods.ok_or(REQUIRED)?,
             destinations: self.destinations.ok_or(REQUIRED)?,
             invites: self.invites.ok_or(REQUIRED)?,
-            invoices: self.invoices.ok_or(REQUIRED)?,
+            billings: self.billings.ok_or(REQUIRED)?,
             nonces: self.nonces.ok_or(REQUIRED)?,
             subscriptions: self.subscriptions.ok_or(REQUIRED)?,
             orders: self.orders.ok_or(REQUIRED)?,

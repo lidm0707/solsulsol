@@ -31,15 +31,14 @@ test(`${FLOW}`, async ({ page }) => {
   await gotoUi(page);
   await uiSignIn(page);
   await page.locator('[aria-label="new-shop"]').click();
-  await expect(page.locator(".modal-overlay")).toContainText("Subscription required", { timeout: 15_000 });
-  await uiSubscribe(page);
   await expect(page.locator('input[placeholder="new shop name"]')).toBeVisible({ timeout: 20_000 });
+  // Subscription gate opens after entering the shop; subscribe there.
 
   // 02: create shop
   await page.locator('input[placeholder="new shop name"]').fill("Scan Cafe");
   await page.locator('[aria-label="create-shop"]').click();
-  await expect(page.locator(".shop-chip", { hasText: "Scan Cafe" })).toBeVisible({ timeout: 15_000 });
-  await page.locator(".shop-chip", { hasText: "Scan Cafe" }).click();
+  // Unpaid: no entry — the gate blocks before the shop; pay to enter.
+  await uiSubscribe(page);
   await expect(page.locator(".tabbar")).toBeVisible({ timeout: 15_000 });
 
   // 03: goods tab → create goods with barcode

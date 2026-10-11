@@ -67,26 +67,16 @@ async function runFlow(page: any, dir = "ui_flow") {
   await shot(page, dir, "02-connect-wallet-sign-in");
   await uiSignIn(page);
 
-  // 03: + New shop while unpaid → subscription gate modal → pay inside it
+  // 03: + New shop — creation is free, form opens directly
   await page.locator('[aria-label="new-shop"]').click();
-  await expect(page.locator(".modal-overlay")).toContainText("Subscription required", {
-    timeout: 15_000,
-  });
-  await shot(page, dir, "03-subscribe-in-new-shop-gate-modal");
-  await uiSubscribe(page);
-
-  // 04: payment confirmed → shop form appears in the same modal → create shop
   await expect(page.locator('input[placeholder="new shop name"]')).toBeVisible({ timeout: 20_000 });
-  await shot(page, dir, "04-create-shop-via-modal");
+  await shot(page, dir, "03-create-shop-form");
+
+  // 04: create the shop
   await page.locator('input[placeholder="new shop name"]').fill("UI Cafe");
   await page.locator('[aria-label="create-shop"]').click();
-  const shopChip = page.locator(".shop-chip", { hasText: "UI Cafe" });
-  await expect(shopChip).toBeVisible({ timeout: 15_000 });
-
-  // 05: open shop panel → sell tab (icon nav)
-  await shot(page, dir, "05-open-shop-panel-sell-tab-icon-nav");
-  await shopChip.click();
-  await expect(page.locator(".tabbar")).toBeVisible({ timeout: 15_000 });
+  // 05: unpaid — gate blocks before the shop; pay to enter
+  await uiSubscribe(page);
   await expect(page.locator('[aria-label="tab-sell"]')).toBeVisible();
 
   // 06: goods tab → create goods modal with price, cost, units

@@ -36,7 +36,7 @@ impl PaymentConfig {
             price_usdc: crate::domain::entities::subscription::SUB_PRICE_USDC,
             domain: "localhost".to_owned(),
             nonce_ttl_secs: 300,
-            grace_days: 30,
+            grace_days: 7,
             recovery_days: 7,
         }
     }

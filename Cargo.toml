@@ -1,17 +1,17 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/backend",
-    "crates/app",
-    "crates/http",
     "crates/api",
+    "crates/app",
     "crates/barcode",
-    "crates/qr_code",
+    "crates/backend",
+    "crates/cloudflare",
+    "crates/http",
     "crates/promptpay",
+    "crates/qr_code",
+    "crates/sol_wallet_adaptor",
     "crates/ui/ui_interface",
     "crates/ui/ui_wasm",
-    "crates/sol_wallet_adaptor", "crates/cloudflare",
-
 ]
 
 [workspace.package]

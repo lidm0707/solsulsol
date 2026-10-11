@@ -39,8 +39,8 @@ pub struct Shop {
     pub name: String,
     pub vat_mode: VatMode,
     pub vat_rate: Decimal,
-    /// THB per ◎ used for PromptPay QR amounts; 0 disables conversion.
-    pub fx_thb_per_sol: Decimal,
+    /// Swap rate set in settings: THB per USD/USDT; 0 disables conversion.
+    pub fx_thb_per_usd: Decimal,
     /// Display/settlement currency of checkout totals.
     pub currency: Currency,
     /// Set during the post-grace recovery window; hard-deleted later.
@@ -121,13 +121,13 @@ impl Invite {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InvoiceStatus {
+pub enum BillingStatus {
     Pending,
     Paid,
     Cancelled,
 }
 
-impl InvoiceStatus {
+impl BillingStatus {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -184,8 +184,8 @@ impl VatMode {
 /// Currencies a shop may price its totals in.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Currency {
-    #[default]
     Thb,
+    #[default]
     Usdt,
 }
 
@@ -215,20 +215,20 @@ pub(crate) fn round2(v: Decimal) -> Decimal {
 }
 
 #[derive(Debug, Clone)]
-pub struct Invoice {
+pub struct Billing {
     pub id: Uuid,
     pub shop_id: Uuid,
-    pub status: InvoiceStatus,
-    pub lines: Vec<InvoiceLine>,
+    pub status: BillingStatus,
+    pub lines: Vec<BillingLine>,
     pub destination: PaymentDestination,
     pub vat_mode: VatMode,
     pub vat_rate: Decimal,
 }
 
-impl Invoice {
+impl Billing {
     /// Lines total before VAT (equals gross when VAT is inclusive).
     pub fn subtotal(&self) -> Decimal {
-        InvoiceLine::total_amount(self.lines.iter())
+        BillingLine::total_amount(self.lines.iter())
     }
 
     pub fn vat_amount(&self) -> Decimal {
@@ -257,7 +257,7 @@ impl Invoice {
 }
 
 #[derive(Debug, Clone)]
-pub struct InvoiceLine {
+pub struct BillingLine {
     pub goods_id: Uuid,
     pub name: String,
     pub price: Money,
@@ -265,7 +265,7 @@ pub struct InvoiceLine {
     pub qty: u32,
 }
 
-impl InvoiceLine {
+impl BillingLine {
     fn line_total(&self) -> Decimal {
         self.price.amount() * Decimal::from(self.qty)
     }
@@ -280,21 +280,21 @@ impl InvoiceLine {
 pub struct Order {
     pub id: Uuid,
     pub shop_id: Uuid,
-    pub lines: Vec<InvoiceLine>,
+    pub lines: Vec<BillingLine>,
     pub destination_id: Uuid,
     pub created_at: DateTime<Utc>,
 }
 
 impl Order {
     pub fn total(&self) -> Decimal {
-        InvoiceLine::total_amount(self.lines.iter())
+        BillingLine::total_amount(self.lines.iter())
     }
 
-    pub fn to_invoice(&self, destination: PaymentDestination, shop: &Shop) -> Invoice {
-        Invoice {
+    pub fn to_billing(&self, destination: PaymentDestination, shop: &Shop) -> Billing {
+        Billing {
             id: self.id,
             shop_id: self.shop_id,
-            status: InvoiceStatus::Pending,
+            status: BillingStatus::Pending,
             lines: self.lines.clone(),
             destination,
             vat_mode: shop.vat_mode,

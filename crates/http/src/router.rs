@@ -8,11 +8,12 @@ use pos_api::error::ApiError;
 use pos_api::routes;
 use pos_api::schema::{
     AddDestinationRequest, AddGoodsRequest, AuthNonceRequest, AuthNonceResponse, AuthResponse,
-    AuthVerifyRequest, CheckoutRequest, CreatePaymentOrderRequest, CreateShopRequest, Currency,
-    DestinationResponse, GoodsResponse, GoodsSalesResponse, InviteAcceptRequest, InviteRequest,
-    InviteResponse, MeResponse, PaymentOrderResponse, PaymentOrderStatusApi, ShopMemberResponse,
-    ShopResponse, SubscriptionResponse, SubscriptionStatusApi, UpdateMemberRoleRequest,
-    UpdateShopSettingsRequest, VatMode, VerifyPaymentRequest,
+    AuthVerifyRequest, BillingPeriodApi, CheckoutRequest, CreatePaymentOrderRequest,
+    CreateShopRequest, Currency, DestinationResponse, GoodsResponse, GoodsSalesResponse,
+    InviteAcceptRequest, InviteRequest, InviteResponse, MeResponse, PaymentOrderResponse,
+    PaymentOrderStatusApi, ShopMemberResponse, ShopResponse, SubscriptionResponse,
+    SubscriptionStatusApi, UpdateMemberRoleRequest, UpdateShopSettingsRequest, VatMode,
+    VerifyPaymentRequest,
 };
 use tower_http::cors::CorsLayer;
 #[cfg(not(target_arch = "wasm32"))]
@@ -88,7 +89,6 @@ const fn chain_to_domain(c: pos_api::schema::Chain) -> pos_app::domain::value_ob
 
 const fn token_to_api(t: pos_app::domain::value_objects::SplToken) -> pos_api::schema::SplToken {
     match t {
-        pos_app::domain::value_objects::SplToken::Sol => pos_api::schema::SplToken::Sol,
         pos_app::domain::value_objects::SplToken::Usdc => pos_api::schema::SplToken::Usdc,
         pos_app::domain::value_objects::SplToken::Usdt => pos_api::schema::SplToken::Usdt,
     }
@@ -96,7 +96,6 @@ const fn token_to_api(t: pos_app::domain::value_objects::SplToken) -> pos_api::s
 
 const fn token_to_domain(t: pos_api::schema::SplToken) -> pos_app::domain::value_objects::SplToken {
     match t {
-        pos_api::schema::SplToken::Sol => pos_app::domain::value_objects::SplToken::Sol,
         pos_api::schema::SplToken::Usdc => pos_app::domain::value_objects::SplToken::Usdc,
         pos_api::schema::SplToken::Usdt => pos_app::domain::value_objects::SplToken::Usdt,
     }
@@ -126,6 +125,18 @@ pub fn build_router(state: AppServices) -> Router {
         )
         .route(routes::SHOP_GOODS_SALES, get(handlers::goods_sales))
         .route(
+            routes::SHOP_GOODS_ID,
+            axum::routing::delete(handlers::delete_goods),
+        )
+        .route(
+            routes::SHOP_STORAGE_OBJECTS,
+            get(handlers::list_storage_objects),
+        )
+        .route(
+            routes::SHOP_STORAGE_OBJECT,
+            axum::routing::delete(handlers::delete_storage_object),
+        )
+        .route(
             routes::SHOP_DESTINATIONS,
             post(handlers::add_destination).get(handlers::list_destinations),
         )
@@ -144,11 +155,11 @@ pub fn build_router(state: AppServices) -> Router {
             routes::SHOP_SETTINGS,
             axum::routing::put(handlers::update_settings),
         )
-        .route(routes::SHOP_BILLINGS, get(handlers::list_invoices))
+        .route(routes::SHOP_BILLINGS, get(handlers::list_billings))
         .route(routes::INVITE_ACCEPT, post(handlers::accept_invite));
 
     #[cfg(not(target_arch = "wasm32"))]
-    let router = router.route(routes::SHOP_BILLING_PDF, get(handlers::invoice_pdf));
+    let router = router.route(routes::SHOP_BILLING_PDF, get(handlers::billing_pdf));
 
     #[cfg(not(target_arch = "wasm32"))]
     let router = router.layer(TraceLayer::new_for_http());
@@ -165,11 +176,27 @@ fn map_shop(e: ShopError) -> ApiErrorReponse {
         ShopError::NotMember => ApiError::Unauthorized,
         ShopError::Forbidden | ShopError::Rule(_) => ApiError::Forbidden,
         ShopError::InviteeUnknown | ShopError::NotFound => ApiError::NotFound,
+        ShopError::GoodsBillingd => {
+            ApiError::Invalid("goods has billing history and cannot be deleted".into())
+        }
         ShopError::InviteNotAcceptable => ApiError::Invalid("invite not acceptable".into()),
         ShopError::Subscription(sub_err) => map_sub(sub_err),
         ShopError::Storage(_) => ApiError::Internal,
     };
     ApiErrorReponse(api)
+}
+
+fn period_to_domain(
+    p: Option<BillingPeriodApi>,
+) -> pos_app::domain::entities::subscription::BillingPeriod {
+    match p {
+        Some(BillingPeriodApi::Yearly) => {
+            pos_app::domain::entities::subscription::BillingPeriod::Yearly
+        }
+        Some(BillingPeriodApi::Monthly) | None => {
+            pos_app::domain::entities::subscription::BillingPeriod::Monthly
+        }
+    }
 }
 
 fn map_sub(e: sub_svc::SubError) -> ApiError {
@@ -264,10 +291,10 @@ mod handlers {
     pub async fn create_order(
         State(svc): State<AppServices>,
         auth: AuthUser,
-        Json(_req): Json<CreatePaymentOrderRequest>,
+        Json(req): Json<CreatePaymentOrderRequest>,
     ) -> Api<PaymentOrderResponse> {
         // renewal is just a new order + verify
-        let order = sub_svc::create_order(&svc, auth.user_id)
+        let order = sub_svc::create_order(&svc, auth.user_id, period_to_domain(req.period))
             .await
             .map_err(|e| ApiErrorReponse(map_sub(e)))?;
         Ok(axum::Json(order_response(&order)))
@@ -276,8 +303,9 @@ mod handlers {
     pub async fn renew(
         State(svc): State<AppServices>,
         auth: AuthUser,
+        Json(req): Json<CreatePaymentOrderRequest>,
     ) -> Api<PaymentOrderResponse> {
-        let order = sub_svc::create_order(&svc, auth.user_id)
+        let order = sub_svc::create_order(&svc, auth.user_id, period_to_domain(req.period))
             .await
             .map_err(|e| ApiErrorReponse(map_sub(e)))?;
         Ok(axum::Json(order_response(&order)))
@@ -349,21 +377,14 @@ mod handlers {
         else {
             return Ok(None);
         };
-        let shops_used = svc
-            .shops
-            .find_for_user(user_id)
-            .await
-            .map_err(|e| {
-                tracing::warn!("subscription_payload shops: {e}");
-                ApiErrorReponse(ApiError::Internal)
-            })?
-            .len();
+        let user_shops = svc.shops.find_for_user(user_id).await.map_err(|e| {
+            tracing::warn!("subscription_payload shops: {e}");
+            ApiErrorReponse(ApiError::Internal)
+        })?;
+        let shops_used = user_shops.iter().filter(|s| s.owner_id == user_id).count();
         let mut goods_used = 0usize;
         let mut storage_bytes = 0i64;
-        for s in svc.shops.find_for_user(user_id).await.map_err(|e| {
-            tracing::warn!("subscription_payload shops2: {e}");
-            ApiErrorReponse(ApiError::Internal)
-        })? {
+        for s in user_shops {
             goods_used += svc
                 .goods
                 .find_by_shop(s.id)
@@ -423,7 +444,7 @@ mod handlers {
             name: s.name,
             vat_mode: vat_mode_to_api(s.vat_mode),
             vat_rate: s.vat_rate,
-            fx_thb_per_sol: s.fx_thb_per_sol,
+            fx_thb_per_usd: s.fx_thb_per_usd,
             currency: currency_to_api(s.currency),
         }))
     }
@@ -445,7 +466,7 @@ mod handlers {
             shop_id,
             mode,
             req.vat_rate,
-            req.fx_thb_per_sol,
+            req.fx_thb_per_usd,
             match req.currency {
                 Currency::Thb => pos_app::domain::entities::Currency::Thb,
                 Currency::Usdt => pos_app::domain::entities::Currency::Usdt,
@@ -471,7 +492,7 @@ mod handlers {
                 name: s.name,
                 vat_mode: vat_mode_to_api(s.vat_mode),
                 vat_rate: s.vat_rate,
-                fx_thb_per_sol: s.fx_thb_per_sol,
+                fx_thb_per_usd: s.fx_thb_per_usd,
                 currency: currency_to_api(s.currency),
             })
             .collect();
@@ -531,6 +552,60 @@ mod handlers {
             .await
             .map_err(map_shop)?;
         Ok(axum::Json(items.iter().map(goods_response).collect()))
+    }
+
+    pub async fn delete_goods(
+        State(svc): State<AppServices>,
+        auth: AuthUser,
+        Path((shop_id, goods_id)): Path<(Uuid, Uuid)>,
+    ) -> Api<()> {
+        goods_svc::delete_goods(&svc, auth.user_id, shop_id, goods_id)
+            .await
+            .map_err(map_shop)?;
+        Ok(axum::Json(()))
+    }
+
+    pub async fn list_storage_objects(
+        State(svc): State<AppServices>,
+        auth: AuthUser,
+        Path(shop_id): Path<Uuid>,
+    ) -> Api<Vec<pos_api::schema::StorageObjectResponse>> {
+        shop::require_min_role(
+            &svc,
+            auth.user_id,
+            shop_id,
+            pos_app::domain::value_objects::Role::Employee,
+        )
+        .await
+        .map_err(map_shop)?;
+        let items = sub_svc::list_storage(&svc, shop_id)
+            .await
+            .map_err(|e| ApiErrorReponse(map_sub(e)))?;
+        Ok(axum::Json(
+            items
+                .into_iter()
+                .map(|(key, bytes)| pos_api::schema::StorageObjectResponse { key, bytes })
+                .collect(),
+        ))
+    }
+
+    pub async fn delete_storage_object(
+        State(svc): State<AppServices>,
+        auth: AuthUser,
+        Path((shop_id, key)): Path<(Uuid, Uuid)>,
+    ) -> Api<()> {
+        shop::require_min_role(
+            &svc,
+            auth.user_id,
+            shop_id,
+            pos_app::domain::value_objects::Role::Admin,
+        )
+        .await
+        .map_err(map_shop)?;
+        sub_svc::remove_storage(&svc, shop_id, key)
+            .await
+            .map_err(|e| ApiErrorReponse(map_sub(e)))?;
+        Ok(axum::Json(()))
     }
 
     fn goods_response(p: &pos_app::domain::entities::Goods) -> GoodsResponse {
@@ -709,7 +784,7 @@ mod handlers {
         auth: AuthUser,
         Path(shop_id): Path<Uuid>,
         Json(req): Json<CheckoutRequest>,
-    ) -> Api<pos_api::schema::InvoiceResponse> {
+    ) -> Api<pos_api::schema::BillingResponse> {
         shop::require_min_role(
             &svc,
             auth.user_id,
@@ -734,8 +809,9 @@ mod handlers {
             .map_err(|_| ApiErrorReponse(ApiError::Internal))?
             .ok_or(ApiErrorReponse(ApiError::NotFound))?;
         let qr = svc.qr.clone();
-        let (invoice, _qr_png) = pos_app::service::invoice::checkout(
+        let (billing, _qr_png) = pos_app::service::billing::checkout(
             &svc,
+            auth.user_id,
             qr.as_ref(),
             svc.promptpay.as_ref(),
             &shop,
@@ -744,39 +820,42 @@ mod handlers {
         )
         .await
         .map_err(|e| match e {
-            pos_app::service::invoice::InvoiceError::NoGoods => {
+            pos_app::service::billing::BillingError::NoGoods => {
                 ApiError::Invalid("no goods selected".into())
             }
-            pos_app::service::invoice::InvoiceError::Storage(ref msg) => {
+            pos_app::service::billing::BillingError::Subscription(sub) => map_sub(sub),
+            pos_app::service::billing::BillingError::Storage(ref msg) => {
                 tracing::debug!("checkout storage: {msg}");
                 ApiError::Internal
             }
         })?;
-        let payload = pos_app::service::invoice::pay_payload(
+        let payload = pos_app::service::billing::pay_payload(
             svc.promptpay.as_ref(),
-            &invoice.destination,
-            pos_app::service::invoice::qr_amount(
-                invoice.total(),
-                invoice.destination.address.chain(),
-                shop.fx_thb_per_sol,
+            &billing.destination,
+            pos_app::service::billing::qr_amount(
+                billing.total(),
+                billing.destination.address.chain(),
+                shop.currency,
+                shop.fx_thb_per_usd,
             ),
         );
-        Ok(axum::Json(invoice_response(
-            &invoice,
+        Ok(axum::Json(billing_response(
+            &billing,
             &payload,
-            pos_app::service::invoice::qr_amount(
-                invoice.total(),
-                invoice.destination.address.chain(),
-                shop.fx_thb_per_sol,
+            pos_app::service::billing::qr_amount(
+                billing.total(),
+                billing.destination.address.chain(),
+                shop.currency,
+                shop.fx_thb_per_usd,
             ),
         )))
     }
 
-    pub async fn list_invoices(
+    pub async fn list_billings(
         State(svc): State<AppServices>,
         auth: AuthUser,
         Path(shop_id): Path<Uuid>,
-    ) -> Api<Vec<pos_api::schema::InvoiceResponse>> {
+    ) -> Api<Vec<pos_api::schema::BillingResponse>> {
         shop::require_min_role(
             &svc,
             auth.user_id,
@@ -785,39 +864,43 @@ mod handlers {
         )
         .await
         .map_err(map_shop)?;
-        let invoices = svc
-            .invoices
+        let billings = svc
+            .billings
             .list_by_shop(shop_id)
             .await
             .map_err(|_| ApiErrorReponse(ApiError::Internal))?;
-        let fx = svc
+        let (currency, fx) = svc
             .shops
             .find_by_id(shop_id)
             .await
             .map_err(|_| ApiErrorReponse(ApiError::Internal))?
-            .map(|s| s.fx_thb_per_sol)
-            .unwrap_or(pos_api::schema::DECIMAL_ZERO);
-        let mut out = Vec::with_capacity(invoices.len());
-        for inv in invoices {
-            let amount = pos_app::service::invoice::qr_amount(
+            .map(|s| (s.currency, s.fx_thb_per_usd))
+            .unwrap_or((
+                pos_app::domain::entities::Currency::default(),
+                pos_api::schema::DECIMAL_ZERO,
+            ));
+        let mut out = Vec::with_capacity(billings.len());
+        for inv in billings {
+            let amount = pos_app::service::billing::qr_amount(
                 inv.total(),
                 inv.destination.address.chain(),
+                currency,
                 fx,
             );
-            let payload = pos_app::service::invoice::pay_payload(
+            let payload = pos_app::service::billing::pay_payload(
                 svc.promptpay.as_ref(),
                 &inv.destination,
                 amount,
             );
-            out.push(invoice_response(&inv, &payload, amount));
+            out.push(billing_response(&inv, &payload, amount));
         }
         Ok(axum::Json(out))
     }
     #[cfg(not(target_arch = "wasm32"))]
-    pub async fn invoice_pdf(
+    pub async fn billing_pdf(
         State(svc): State<AppServices>,
         auth: AuthUser,
-        Path((shop_id, invoice_id)): Path<(Uuid, Uuid)>,
+        Path((shop_id, billing_id)): Path<(Uuid, Uuid)>,
     ) -> Result<axum::response::Response, ApiErrorReponse> {
         shop::require_min_role(
             &svc,
@@ -827,13 +910,13 @@ mod handlers {
         )
         .await
         .map_err(map_shop)?;
-        let invoice = svc
-            .invoices
-            .find_by_id(invoice_id)
+        let billing = svc
+            .billings
+            .find_by_id(billing_id)
             .await
             .map_err(|_| ApiErrorReponse(ApiError::Internal))?
             .ok_or(ApiErrorReponse(ApiError::NotFound))?;
-        if invoice.shop_id != shop_id {
+        if billing.shop_id != shop_id {
             return Err(ApiErrorReponse(ApiError::NotFound));
         }
         let shop = svc
@@ -842,13 +925,14 @@ mod handlers {
             .await
             .map_err(|_| ApiErrorReponse(ApiError::Internal))?
             .ok_or(ApiErrorReponse(ApiError::NotFound))?;
-        let payload = pos_app::service::invoice::pay_payload(
+        let payload = pos_app::service::billing::pay_payload(
             svc.promptpay.as_ref(),
-            &invoice.destination,
-            pos_app::service::invoice::qr_amount(
-                invoice.total(),
-                invoice.destination.address.chain(),
-                shop.fx_thb_per_sol,
+            &billing.destination,
+            pos_app::service::billing::qr_amount(
+                billing.total(),
+                billing.destination.address.chain(),
+                shop.currency,
+                shop.fx_thb_per_usd,
             ),
         );
         let qr_png = svc
@@ -856,23 +940,18 @@ mod handlers {
             .render_png(&payload)
             .await
             .map_err(|_| ApiErrorReponse(ApiError::Internal))?;
-        let bytes = pos_app::service::pdf::render_invoice_pdf(
-            &invoice,
-            &shop.name,
-            &qr_png,
-            shop.currency,
-            shop.fx_thb_per_sol,
-        )
-        .map_err(|_| ApiErrorReponse(ApiError::Internal))?;
-        // Billing PDFs count toward the 10 MB shop quota (once per invoice).
-        sub_svc::record_storage(&svc, shop_id, invoice_id, bytes.len() as i64)
+        let bytes =
+            pos_app::service::pdf::render_billing_pdf(&billing, &shop.name, &qr_png, shop.currency)
+                .map_err(|_| ApiErrorReponse(ApiError::Internal))?;
+        // Billing PDFs count toward the 10 MB shop quota (once per billing).
+        sub_svc::record_storage(&svc, shop_id, billing_id, bytes.len() as i64)
             .await
             .map_err(|e| ApiErrorReponse(map_sub(e)))?;
         axum::response::Response::builder()
             .header("content-type", "application/pdf")
             .header(
                 "content-disposition",
-                format!("attachment; filename=\"billing-{invoice_id}.pdf\""),
+                format!("attachment; filename=\"billing-{billing_id}.pdf\""),
             )
             .body(axum::body::Body::from(bytes))
             .map_err(|_| ApiErrorReponse(ApiError::Internal))
@@ -891,23 +970,23 @@ mod handlers {
         }
     }
 
-    fn invoice_response(
-        inv: &pos_app::domain::entities::Invoice,
+    fn billing_response(
+        inv: &pos_app::domain::entities::Billing,
         payload: &str,
         qr_amount: rust_decimal::Decimal,
-    ) -> pos_api::schema::InvoiceResponse {
-        let lines: Vec<pos_api::schema::InvoiceLineResponse> = inv
+    ) -> pos_api::schema::BillingResponse {
+        let lines: Vec<pos_api::schema::BillingLineResponse> = inv
             .lines
             .iter()
-            .map(|l| pos_api::schema::InvoiceLineResponse {
+            .map(|l| pos_api::schema::BillingLineResponse {
                 name: l.name.clone(),
                 price: l.price.amount().normalize(),
                 qty: l.qty,
                 cost: l.cost.normalize(),
             })
             .collect();
-        pos_api::schema::InvoiceResponse {
-            invoice_id: inv.id,
+        pos_api::schema::BillingResponse {
+            billing_id: inv.id,
             shop_id: inv.shop_id,
             total: inv.total().normalize(),
             qr_amount,

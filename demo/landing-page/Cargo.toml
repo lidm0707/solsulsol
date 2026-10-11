@@ -1,0 +1,17 @@
+[workspace]
+
+[package]
+name = "landing_page"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[dependencies]
+dioxus = { version = "0.7", features = ["web"] }
+dioxus-web = "0.7"
+console_error_panic_hook = "0.1"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1

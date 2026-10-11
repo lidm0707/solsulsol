@@ -66,6 +66,39 @@ pub fn validate(raw: &str) -> Result<BarcodeFormat, BarcodeError> {
     }
 }
 
+/// Validate raw input as a specific symbology.
+pub fn validate_as(format: BarcodeFormat, raw: &str) -> Result<BarcodeFormat, BarcodeError> {
+    let code = normalize(raw);
+    if code.is_empty() {
+        return Err(BarcodeError::Empty);
+    }
+    let Some(digits) = format.digits() else {
+        return validate_code39(&code);
+    };
+    if code.len() != digits {
+        return Err(BarcodeError::BadLength {
+            expected: digits,
+            got: code.len(),
+        });
+    }
+    expect_digits(&code)?;
+    if code.len() == EAN8_DIGITS {
+        checksum(&code, EAN8_DIGITS)
+            .then_some(Ean8)
+            .ok_or(BarcodeError::BadChecksum { format: Ean8 })
+    } else {
+        // UPC-A is EAN-13 with a leading 0; one checksum covers both forms.
+        let extended = if format == UpcA {
+            format!("0{code}")
+        } else {
+            code
+        };
+        checksum(&extended, EAN13_DIGITS)
+            .then_some(format)
+            .ok_or(BarcodeError::BadChecksum { format })
+    }
+}
+
 fn validate_code39(code: &str) -> Result<BarcodeFormat, BarcodeError> {
     let len = code.chars().count();
     if !(CODE39_MIN_CHARS..=CODE39_MAX_CHARS).contains(&len) {

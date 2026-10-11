@@ -56,25 +56,19 @@ test("cf ui flow: wallet auth → subscribe → shop → goods → wallet → se
   await uiSignIn(page);
   await expect(page.locator('[aria-label="new-shop"]')).toBeVisible({ timeout: 20_000 });
 
-  // $1/mo subscription — dashboard has no tabbar before a shop exists,
-  // so drive the Subscription card directly (no tab-subscribe here)
-  await shot(page, "02-dashboard-subscription-card");
+  // creation is free — the subscription gate shows inside the shop after
+  // entering; drive the form directly
+  await shot(page, "02-dashboard-shop-form");
   await page.locator('[aria-label="new-shop"]').click();
-  await expect(page.locator(".modal-overlay")).toContainText("Subscription required", { timeout: 15_000 });
-  await uiSubscribe(page);
-  await shot(page, "03-subscribed");
-
-  // create shop (form appears in the gate modal after payment)
-  await shot(page, "04-login-shop-select-page");
   await expect(page.locator('input[placeholder="new shop name"]')).toBeVisible({ timeout: 20_000 });
+
+  // create shop
+  await shot(page, "04-login-shop-select-page");
   await page.locator('input[placeholder="new shop name"]').fill("CF UI Cafe");
   await page.locator('[aria-label="create-shop"]').click();
-  const shopChip = page.locator(".shop-chip", { hasText: "CF UI Cafe" });
-  await expect(shopChip).toBeVisible({ timeout: 20_000 });
-
-  // open shop panel → sell tab
+  // Unpaid: no entry — the gate blocks before the shop; pay to enter.
   await shot(page, "05-create-shop-via-modal");
-  await shopChip.click();
+  await uiSubscribe(page);
   await expect(page.locator(".tabbar")).toBeVisible({ timeout: 20_000 });
   await expect(page.locator('[aria-label="tab-sell"]')).toBeVisible();
   await shot(page, "06-open-shop-panel-sell-tab");

@@ -1,4 +1,8 @@
-.PHONY: check clippy test build run e2e e2e-down e2e-cloudflare e2e-cloudflare-down cloudflare-dev cloudflare-dev-down stack-up stack-down ui-build worker-prepare worker-dev worker-deploy worker-clean clean
+.PHONY: check clippy test build run e2e e2e-down e2e-cloudflare e2e-cloudflare-down cloudflare-dev cloudflare-dev-down landing-build deploy-landingpage worker-prepare worker-dev worker-deploy worker-clean clean
+
+LANDING_APP_URL = https://shop.solsulsol.com
+LANDING_PAGES_PROJECT = solsul-landing
+LANDING_DIST = dist/landingpage
 
 check:
 	cargo check --workspace
@@ -53,6 +57,28 @@ e2e-video:
 		mcr.microsoft.com/playwright:v1.62.1-noble \
 		npx playwright test specs/full_workflow.spec.ts
 
+# Same but with the human-paced demo spec (slow, clear steps).
+e2e-video-demo:
+	node e2e/scripts/prepare-solana.cjs ensure-keys
+	docker compose -f docker/docker-compose.e2e.yml down -v || true
+	docker rm -f pos-ui-e2e || true
+	docker compose -f docker/docker-compose.e2e.yml up -d --build
+	docker run -d --name pos-ui-e2e -p 8081:80 \
+		-v $(CURDIR)/crates/ui/ui_wasm/dist:/usr/share/nginx/html:ro nginx:alpine || true
+	@n=1; \
+	while ! curl -sf http://localhost:18080/health >/dev/null; do \
+		[ $$n -ge 60 ] && echo "backend not healthy" && exit 1; \
+		echo "waiting for backend ($$n/60)..."; sleep 2; n=$$((n+1)); done
+	docker run --rm --add-host=host.docker.internal:host-gateway \
+		-e UI=http://host.docker.internal:8081 \
+		-e BACKEND=http://host.docker.internal:18080 \
+		-e SURFPOOL=http://host.docker.internal:8899 \
+		-e POS_UI_URL=http://host.docker.internal:8081 \
+		-e POS_BACKEND_URL=http://host.docker.internal:18080 \
+		-v $(CURDIR):/work -w /work/e2e \
+		mcr.microsoft.com/playwright:v1.62.1-noble \
+		npx playwright test specs/demo_human_flow.spec.ts
+
 e2e-down:
 	docker compose -f docker/docker-compose.e2e.yml down -v
 
@@ -96,6 +122,14 @@ cloudflare-dev-down:
 
 ui-build:
 	cd crates/ui/ui_wasm && trunk build --release --dist dist
+
+landing-build:
+	rm -rf $(LANDING_DIST)
+	mkdir -p $(LANDING_DIST)
+	cd demo/landing-page && LANDING_APP_URL=$(LANDING_APP_URL) trunk build --release --dist ../../$(LANDING_DIST)
+
+deploy-landingpage: landing-build
+	npx wrangler pages deploy $(LANDING_DIST) --project-name $(LANDING_PAGES_PROJECT)
 
 worker-prepare: ui-build
 	docker/make_d1_schema.sh

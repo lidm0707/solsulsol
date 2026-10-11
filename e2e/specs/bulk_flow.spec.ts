@@ -81,17 +81,15 @@ async function runFlow(page: any, _dir = "bulk_flow") {
   await gotoUi(page);
   await uiSignIn(page);
   await page.locator('[aria-label="new-shop"]').click();
-  await expect(page.locator(".modal-overlay")).toContainText("Subscription required", { timeout: 15_000 });
-  await uiSubscribe(page);
   await expect(page.locator('input[placeholder="new shop name"]')).toBeVisible({ timeout: 20_000 });
+  // Subscription gate opens after entering the shop; subscribe there.
 
   // 02: create shop via modal
   await shot(page, "bulk_flow", "02-create-shop-via-modal");
   await page.locator('input[placeholder="new shop name"]').fill(`Bulk Cafe ${rand()}`);
   await page.locator('[aria-label="create-shop"]').click();
-  const shopChip = page.locator(".shop-chip").first();
-  await expect(shopChip).toBeVisible({ timeout: 20_000 });
-  await shopChip.click();
+  // Unpaid: no entry — the gate blocks before the shop; pay to enter.
+  await uiSubscribe(page);
   await expect(page.locator(".tabbar")).toBeVisible({ timeout: 20_000 });
 
   // 03: token via API for bulk setup

@@ -34,24 +34,33 @@ Small merchants (cafés, street food, retail shops in Thailand) juggle cash, Pro
 Thai small-merchant owners and cashiers; crypto-holding customers (tourists + locals) who want to pay with USDC/USDG/SPL tokens.
 
 ### 3. Product
-A full point-of-sale web app (Rust workspace: axum backend, Postgres/sqlx, Dioxus/WASM frontend) with:
+A full point-of-sale web app (Rust workspace: axum backend, Postgres/sqlx,
+Dioxus/WASM frontend — also deployable as a Cloudflare Worker on D1) with:
+- Wallet-only auth (Phantom/Solfare sign-in) + $1/mo USDC subscription
 - Shop, product, and barcode-scanner sales flow
-- Billing with VAT, hold-bill, bulk operations
-- PDF invoices + QR payment
-- Payments: SPL token transfer and PromptPay QR
-- E2E-tested UI (Playwright)
+- Billing with VAT (none/exclusive/inclusive), hold-bill, PDF receipts
+- **Fiat pricing**: goods priced in THB or USDT; merchant-set swap rate
+  (THB per $1) converts at QR time — PromptPay QRs always in THB, Solana
+  QRs carry the USD-token amount
+- Payments: Solana Pay (USDC/USDT/SPL) and Thai PromptPay QR (EMVCo)
+- E2E-tested UI (Playwright, recorded demo flows)
 
 ### 4. AI
-Where AI creates leverage (pick/confirm before submission):
+> ⚠️ **Status: not implemented yet** — the repo currently ships no AI code.
+> The bounty requires an AI feature demoed live; pick ONE of these and build
+> it before submission:
 - AI sales assistant: natural-language checkout ("2 iced lattes, one has oat milk") → cart actions
 - AI receipt/invoice assistant: ask questions about sales data ("yesterday's revenue by category")
 - AI agent payments: expose the POS as an MCP tool / x402-payable endpoint so AI agents can complete purchases autonomously
 - Smart reconciliation: match onchain txs to invoices
 
 ### 5. Solana Layer
-- SPL token payments (USDC/USDG) directly to merchant wallet — no custodian
-- Solana Pay / QR transfer requests for customer-initiated payment
-- x402 protocol for machine-to-machine payments (per bounty resources)
+- SPL token payments (USDC/USDT) directly to merchant wallet — no custodian
+- Solana Pay / QR transfer requests for customer-initiated payment, verified
+  on-chain (destination, mint, amount) before a sale is marked paid
+- Fiat interop: THB PromptPay QRs derived from the same THB/USD pricing via
+  the merchant's swap rate
+- x402 protocol for machine-to-machine payments (planned, per bounty resources)
 - Fast, near-zero-fee settlement suited to small-ticket POS transactions
 
 ### 6. Distribution
@@ -78,7 +87,12 @@ Fill in: names, roles, prior work, Thailand base, why this team ships.
 
 ## Demo Checklist
 
-- [ ] 2–3 min demo video (AI voiceover confirmed OK per bounty comments)
-- [ ] Live POS flow: scan → cart → VAT → pay with SPL token on devnet/mainnet
-- [ ] Show onchain tx confirmation in merchant view
-- [ ] AI feature demoed live
+- [x] 2–3 min demo video — `demo/demo_human_flow.mp4` (re-recorded on the
+      fiat-pricing UI; AI voiceover confirmed OK per bounty comments)
+- [x] Live POS flow: scan → cart → VAT → QR (PromptPay THB + Solana
+      USDC/USDT), covered by e2e specs (`qr_types`, `currency_flow`,
+      `demo_human_flow`)
+- [x] Show onchain tx confirmation in merchant view — subscription payment
+      flow verifies a real USDC transfer on-chain (surfpool in e2e, devnet/
+      mainnet via `USDC_MINT` config)
+- [ ] AI feature demoed live — **missing**; see section 4, must be built
